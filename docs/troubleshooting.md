@@ -5,7 +5,7 @@
 Check:
 
 - the workflow is activated in n8n
-- the Railway deployment is healthy
+- the Render deployment is healthy
 - the Telegram webhook is registered to `/webhook/telegram-assistant`
 - `TELEGRAM_BOT_TOKEN` is correct
 - `WEBHOOK_URL` matches the live public domain exactly
@@ -16,12 +16,12 @@ Run:
 https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo
 ```
 
-## Railway deployment succeeds but the editor is unreachable
+## Render deployment succeeds but the editor is unreachable
 
 Check:
 
 - `N8N_HOST=0.0.0.0`
-- `N8N_PORT` resolves to Railway `PORT` through the entrypoint
+- `N8N_PORT` resolves to Render `PORT` through the entrypoint
 - `N8N_EDITOR_BASE_URL` is your exact public domain
 - `N8N_PROTOCOL=https` in production
 
@@ -63,7 +63,7 @@ Common causes:
 - wrong domain in `WEBHOOK_URL`
 - HTTPS not available
 - `TELEGRAM_WEBHOOK_SECRET` mismatch
-- Railway service not passing readiness yet
+- Render service not passing readiness yet
 
 ## n8n asks for onboarding or owner setup
 
@@ -83,6 +83,5 @@ Check:
 
 Telegram cannot call `localhost`. Use either:
 
-- Railway deployment
+- Render deployment
 - a public HTTPS tunnel that forwards to local n8n
-

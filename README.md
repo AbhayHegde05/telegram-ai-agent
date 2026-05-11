@@ -1,6 +1,6 @@
-# AI Telegram Assistant with n8n, Groq, Supabase, Railway, and Docker
+# AI Telegram Assistant with n8n, Groq, Supabase, Render, and Docker
 
-This repository is a complete production-ready Telegram AI assistant built around `n8n`, `Groq`, `Supabase`, `Docker`, and `Railway`.
+This repository is a complete production-ready Telegram AI assistant built around `n8n`, `Groq`, `Supabase`, `Docker`, and `Render`.
 
 It is designed to be:
 
@@ -44,7 +44,7 @@ Telegram Bot API
 |-- .gitignore
 |-- Dockerfile
 |-- docker-compose.yml
-|-- railway.json
+|-- render.yaml
 |-- README.md
 |-- docker/
 |   `-- entrypoint.sh
@@ -108,7 +108,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-workflow.ps1
 docker compose up --build
 ```
 
-6. Open `http://localhost:5678` for local setup, or your Railway domain in production.
+6. Open `http://localhost:5678` for local setup, or your Render domain in production.
 7. Register the Telegram webhook after the deployment URL is live:
 
 ```powershell
@@ -126,12 +126,12 @@ For local-only Docker testing, set these values in `.env`:
 
 Telegram requires a public HTTPS webhook URL, so fully local webhook testing needs a tunnel or a remote deployment.
 
-## Railway deployment summary
+## Render deployment summary
 
-- Railway builds the included `Dockerfile`
+- Render builds the included `Dockerfile`
 - n8n persists state under `/home/node/.n8n`
-- attach a Railway Volume at `/home/node/.n8n`
-- `railway.json` configures Dockerfile builds, readiness health checks, and restart-on-failure behavior
+- attach a Render persistent disk at `/home/node/.n8n`
+- `render.yaml` defines the web service, environment variables, and HTTP health check path
 - the bundled entrypoint imports the workflow automatically on first boot
 
 Full deployment instructions are in [docs/deployment-guide.md](/c:/My%20Projects/Telegram%20bot/docs/deployment-guide.md:1).
@@ -152,7 +152,7 @@ The orchestrator uses a two-step agent loop:
    `remember_fact`, `get_history`, `get_memories`
 3. Groq produces the final user-facing answer using tool results.
 
-This keeps the workflow modular while avoiding credential-bound n8n nodes, making imports and Railway deployments more predictable.
+This keeps the workflow modular while avoiding credential-bound n8n nodes, making imports and Render deployments more predictable.
 
 ## Database design
 
@@ -205,7 +205,8 @@ Assistant: Saved to memory: My favorite IDE theme is Tokyo Night`
 - n8n monitoring endpoints: https://docs.n8n.io/hosting/logging-monitoring/monitoring/
 - Groq OpenAI compatibility: https://console.groq.com/docs/openai
 - Groq model reference: https://console.groq.com/docs/models
-- Railway config-as-code: https://docs.railway.com/config-as-code/reference
-- Railway volumes: https://docs.railway.com/develop/volumes
-- Railway restart policy: https://docs.railway.com/deployments/restart-policy
-
+- Render Blueprint spec: https://render.com/docs/blueprint-spec
+- Render persistent disks: https://render.com/docs/disks
+- Render health checks: https://render.com/docs/health-checks
+- Render deploy behavior: https://render.com/docs/deploys
+- Render environment variables: https://render.com/docs/environment-variables

@@ -1,0 +1,65 @@
+services:
+  - type: web
+    name: telegram-ai-assistant-n8n
+    runtime: docker
+    plan: starter
+    numInstances: 1
+    autoDeploy: true
+    healthCheckPath: /healthz/readiness
+    disk:
+      name: n8n-data
+      mountPath: /home/node/.n8n
+      sizeGB: 1
+    envVars:
+      - key: N8N_BASIC_AUTH_ACTIVE
+        value: "true"
+      - key: N8N_BASIC_AUTH_USER
+        value: admin
+      - key: N8N_PROTOCOL
+        value: https
+      - key: N8N_HOST
+        value: 0.0.0.0
+      - key: N8N_PORT
+        value: "5678"
+      - key: GENERIC_TIMEZONE
+        value: Asia/Kolkata
+      - key: TZ
+        value: Asia/Kolkata
+      - key: N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS
+        value: "true"
+      - key: N8N_RUNNERS_ENABLED
+        value: "true"
+      - key: N8N_DIAGNOSTICS_ENABLED
+        value: "false"
+      - key: N8N_PERSONALIZATION_ENABLED
+        value: "false"
+      - key: N8N_SECURE_COOKIE
+        value: "true"
+      - key: N8N_ENDPOINT_HEALTH
+        value: healthz
+      - key: GROQ_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: SUPABASE_CONTEXT_MESSAGE_LIMIT
+        value: "12"
+      - key: SUPABASE_CONTEXT_MEMORY_LIMIT
+        value: "10"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: N8N_BASIC_AUTH_PASSWORD
+        sync: false
+      - key: N8N_ENCRYPTION_KEY
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: WEBHOOK_URL
+        sync: false
+      - key: N8N_EDITOR_BASE_URL
+        sync: false

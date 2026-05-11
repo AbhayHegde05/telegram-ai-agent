@@ -30,7 +30,7 @@ history - Show recent conversation history
 
 ## Register the webhook
 
-After your Railway service is live and the workflow is active:
+After your Render service is live and the workflow is active:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\register-telegram-webhook.ps1
@@ -63,5 +63,4 @@ Healthy signs:
 - Telegram requires a public HTTPS endpoint.
 - Webhook URL must match your deployed public domain.
 - The n8n workflow must be active, not just imported.
-- If you rotate the bot token, you must update Railway and re-register the webhook.
-
+- If you rotate the bot token, you must update Render and re-register the webhook.
