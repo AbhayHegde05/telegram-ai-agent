@@ -1,0 +1,17 @@
+services:
+  n8n:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram-ai-assistant-n8n
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  n8n_data:
+

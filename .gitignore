@@ -1,0 +1,6 @@
+.env
+.env.local
+.n8n/
+n8n_data/
+docker-data/
+
