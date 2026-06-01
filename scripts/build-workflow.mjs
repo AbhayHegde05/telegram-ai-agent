@@ -12,6 +12,7 @@ const outPath = path.join(outDir, "telegram-ai-assistant.json");
 const jsCode = await readFile(jsPath, "utf8");
 
 const workflow = {
+  id: "7f0f3df4-b71a-4f1a-ae6a-65b6f4e2a9a4",
   name: "Telegram AI Assistant - Groq + Supabase",
   nodes: [
     {
@@ -163,7 +164,7 @@ const workflow = {
     templateCredsSetupCompleted: true
   },
   tags: [],
-  active: true,
+  active: false,
   versionId: "f8f3b70b-8313-46fd-9d35-a9bdcb3e5be6"
 };
 
