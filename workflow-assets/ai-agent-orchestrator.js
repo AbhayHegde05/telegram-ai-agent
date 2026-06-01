@@ -9,6 +9,8 @@ const SUPABASE_KEY = env.SUPABASE_ANON_KEY || "";
 const TELEGRAM_WEBHOOK_SECRET = env.TELEGRAM_WEBHOOK_SECRET || "";
 const MESSAGE_LIMIT = Number.parseInt(env.SUPABASE_CONTEXT_MESSAGE_LIMIT || "12", 10);
 const MEMORY_LIMIT = Number.parseInt(env.SUPABASE_CONTEXT_MEMORY_LIMIT || "10", 10);
+const HAS_SUPABASE = Boolean(SUPABASE_URL && SUPABASE_KEY);
+const HAS_GROQ = Boolean(env.GROQ_API_KEY);
 
 function truncateTelegram(text) {
   const safe = typeof text === "string" ? text.trim() : "";
@@ -125,16 +127,6 @@ function normalizeUpdate(payload) {
   };
 }
 
-function assertCoreConfig() {
-  const missing = [];
-  if (!SUPABASE_URL) missing.push("SUPABASE_URL");
-  if (!SUPABASE_KEY) missing.push("SUPABASE_ANON_KEY");
-  if (!env.GROQ_API_KEY) missing.push("GROQ_API_KEY");
-  if (missing.length > 0) {
-    throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
-  }
-}
-
 async function fetchJson(url, options = {}, timeoutMs = 20000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -175,6 +167,9 @@ function supabaseHeaders() {
 }
 
 async function callRpc(rpcName, payload, timeoutMs = 15000) {
+  if (!HAS_SUPABASE) {
+    throw new Error("Supabase is not configured yet.");
+  }
   return fetchJson(`${SUPABASE_URL}/rest/v1/rpc/${rpcName}`, {
     method: "POST",
     headers: supabaseHeaders(),
@@ -297,6 +292,9 @@ function summarizeContextForPrompt(context) {
 }
 
 async function groqChat(messages, temperature = 0.3) {
+  if (!HAS_GROQ) {
+    throw new Error("Groq is not configured yet.");
+  }
   const response = await fetchJson(`${GROQ_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
@@ -312,6 +310,21 @@ async function groqChat(messages, temperature = 0.3) {
   }, 30000);
 
   return response?.choices?.[0]?.message?.content || "";
+}
+
+function basicChatFallback(userInput) {
+  const text = (userInput.text || "").trim();
+  if (!text) {
+    return "I am online and ready. Send me a text message and I will reply.";
+  }
+
+  return [
+    "I am online and reachable from Telegram now.",
+    "",
+    `You said: ${text}`,
+    "",
+    "My advanced AI or memory settings may still be finishing setup, but the bot itself is responding correctly."
+  ].join("\n");
 }
 
 function sanitizeToolCalls(value) {
@@ -558,14 +571,19 @@ async function main() {
   let diagnostics = {
     route: normalized.route,
     model: MODEL,
+    hasSupabase: HAS_SUPABASE,
+    hasGroq: HAS_GROQ,
     memoryStored: false,
     toolResults: []
   };
 
   try {
-    assertCoreConfig();
-    await upsertTelegramUser(normalized);
-    const context = await getUserContext(normalized.telegramId);
+    if (HAS_SUPABASE) {
+      await upsertTelegramUser(normalized);
+    }
+    const context = HAS_SUPABASE
+      ? await getUserContext(normalized.telegramId)
+      : { memories: [], history: [], user: null };
 
     if (normalized.route === "unsupported_content") {
       replyText = unsupportedContentText();
@@ -576,6 +594,9 @@ async function main() {
     } else if (normalized.route === "remember") {
       if (!normalized.commandArg) {
         replyText = "Usage: /remember <fact you want me to store>";
+      } else if (!HAS_SUPABASE) {
+        replyText =
+          "The bot is reachable, but persistent memory is not configured yet. Finish Supabase setup and then /remember will work.";
       } else {
         try {
           await rememberFact(normalized.telegramId, normalized.commandArg);
@@ -587,22 +608,30 @@ async function main() {
         }
       }
     } else if (normalized.route === "history") {
-      replyText = formatHistory(context);
+      replyText = HAS_SUPABASE
+        ? formatHistory(context)
+        : "The bot is reachable, but conversation history is not configured yet. Finish Supabase setup to enable /history.";
     } else if (normalized.route === "unknown_command") {
       replyText = unknownCommandText(normalized.command);
     } else {
-      const agentResult = await runAgent(normalized, context);
-      diagnostics.memoryStored = agentResult.memoryStored;
-      diagnostics.toolResults = agentResult.toolResults;
-      replyText = agentResult.replyText;
+      if (!HAS_GROQ) {
+        replyText = basicChatFallback(normalized);
+      } else {
+        const agentResult = await runAgent(normalized, context);
+        diagnostics.memoryStored = agentResult.memoryStored;
+        diagnostics.toolResults = agentResult.toolResults;
+        replyText = agentResult.replyText;
+      }
     }
 
     replyText = truncateTelegram(replyText);
 
-    try {
-      await saveConversation(normalized.telegramId, normalized.text || "[non-text-message]", replyText);
-    } catch {
-      diagnostics.historyPersisted = false;
+    if (HAS_SUPABASE) {
+      try {
+        await saveConversation(normalized.telegramId, normalized.text || "[non-text-message]", replyText);
+      } catch {
+        diagnostics.historyPersisted = false;
+      }
     }
   } catch (error) {
     replyText =

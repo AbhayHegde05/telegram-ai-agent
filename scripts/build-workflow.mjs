@@ -163,7 +163,7 @@ const workflow = {
     templateCredsSetupCompleted: true
   },
   tags: [],
-  active: false,
+  active: true,
   versionId: "f8f3b70b-8313-46fd-9d35-a9bdcb3e5be6"
 };
 
