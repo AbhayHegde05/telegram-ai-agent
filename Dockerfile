@@ -1,4 +1,4 @@
-FROM docker.n8n.io/n8nio/n8n:2.19.5
+FROM ghcr.io/n8n-io/n8n:2.19.5
 
 USER root
 
@@ -12,4 +12,3 @@ RUN chmod +x /entrypoint.sh \
 USER node
 
 ENTRYPOINT ["/entrypoint.sh"]
-
