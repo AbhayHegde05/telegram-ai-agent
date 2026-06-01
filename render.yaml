@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: telegram-ai-assistant-n8n
+    name: telegram-ai-agent
     runtime: docker
     plan: starter
     numInstances: 1
