@@ -406,6 +406,15 @@ async function buildReply(normalized) {
   }
 
   if (normalized.route === "recommend_command") {
+    const preferences = (normalized.commandArg || "").trim();
+    if (preferences.length >= 4) {
+      const recommendations = await recommendMovies(preferences);
+      return {
+        replyText: recommendations,
+        replyMarkup: mainMenuMarkup()
+      };
+    }
+
     setSession(normalized, { mode: ACTIONS.RECOMMEND });
     return {
       replyText: recommendationPromptText(),
@@ -448,6 +457,22 @@ async function buildReply(normalized) {
 
   const session = getSession(normalized);
   if (session?.mode === ACTIONS.RECOMMEND) {
+    const preferences = (normalized.text || "").trim();
+    if (preferences.length < 4) {
+      return {
+        replyText: "Please add a little more detail, such as genre, language, mood, or movies you liked."
+      };
+    }
+
+    clearSession(normalized);
+    const recommendations = await recommendMovies(preferences);
+    return {
+      replyText: recommendations,
+      replyMarkup: mainMenuMarkup()
+    };
+  }
+
+  if (normalized.route === "chat") {
     const preferences = (normalized.text || "").trim();
     if (preferences.length < 4) {
       return {
