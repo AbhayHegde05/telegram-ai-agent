@@ -192,9 +192,11 @@ function recommendationPromptText() {
   return [
     "Tell me what kind of movie you want.",
     "",
-    "You can include genre, language, mood, age rating, release period, actors, movies you liked, things to avoid, and whether you want mainstream or hidden gems.",
+    "Send your preferences as one message. I will understand it, search the web, and return the top 5 matching movies.",
     "",
-    "Example: action thriller, Hindi or English, recent, smart story, no horror, liked John Wick and Drishyam."
+    "You can include genre, language, mood, length, age rating, release period, actors, movies you liked, things to avoid, and whether you want mainstream or hidden gems.",
+    "",
+    "Example: action movie, around 90 minutes, English, sci-fi preferred, no horror."
   ].join("\n");
 }
 
@@ -236,12 +238,15 @@ function plainTextFromHtml(html) {
 }
 
 async function fetchDuckDuckGoSnippets(query) {
-  const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const response = await fetch(url, {
+    signal: controller.signal,
     headers: {
       "User-Agent": "Mozilla/5.0 TelegramMovieBot/1.0"
     }
-  });
+  }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
     throw new Error(`Search failed with HTTP ${response.status}`);
@@ -249,7 +254,7 @@ async function fetchDuckDuckGoSnippets(query) {
 
   const html = await response.text();
   const snippets = [];
-  const resultRegex = /<a[^>]+class="result__a"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+  const resultRegex = /<a[^>]+class="[^"]*result__a[^"]*"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
   let match;
 
   while ((match = resultRegex.exec(html)) && snippets.length < 8) {
@@ -277,12 +282,22 @@ async function askGroqForRecommendations(preferences, searchSnippets) {
   const baseUrl = ($env.GROQ_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/+$/, "");
   const model = $env.GROQ_MODEL || "llama-3.3-70b-versatile";
   const systemPrompt = [
-    "You are a sharp movie recommendation assistant.",
-    "Use the supplied live web search snippets as supporting evidence, but do not invent sources or links.",
-    "Return exactly 5 recommendations that best match the user's preferences.",
+    "You are a sharp movie recommendation assistant for Telegram.",
+    "First understand the user's free-form request, including genre, language, runtime, mood, exclusions, and examples.",
+    "Use the supplied web search snippets as supporting context. If snippets are weak, rely on your film knowledge and say that web evidence was limited.",
+    "Return exactly 5 movies that best match the user's preferences.",
     "Avoid spoilers.",
-    "For each movie include: rank, title, year if known, languages/regions if useful, why it fits, and a confidence score out of 10.",
-    "End with one short line asking which title they want to explore next."
+    "Do not recommend series unless the user asks for series.",
+    "Prefer real, released movies.",
+    "Use this exact plain-text format:",
+    "Top 5 movie matches",
+    "",
+    "1. Title (Year)",
+    "Genre/language: ...",
+    "Why it fits: ...",
+    "Match score: x/10",
+    "",
+    "Keep each movie to 2-3 short lines and end with: Want a brief for any one of these?"
   ].join(" ");
 
   const userPrompt = [
@@ -303,7 +318,7 @@ async function askGroqForRecommendations(preferences, searchSnippets) {
     body: JSON.stringify({
       model,
       temperature: 0.45,
-      max_tokens: 950,
+      max_tokens: 1100,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
@@ -325,22 +340,26 @@ async function askGroqForRecommendations(preferences, searchSnippets) {
   return content;
 }
 
-async function recommendMovies(preferences) {
-  const searchQueries = [
-    `best movies recommendations ${preferences}`,
-    `top films like ${preferences}`,
-    `best recent movies ${preferences}`
+function buildRecommendationSearchQueries(preferences) {
+  return [
+    `${preferences} best movies recommendations`,
+    `${preferences} top films IMDb Rotten Tomatoes`,
+    `${preferences} best movies Letterboxd recommendations`,
+    `${preferences} underrated movies recommendations`
   ];
-  const snippetGroups = [];
+}
 
-  for (const query of searchQueries) {
-    try {
-      const snippets = await fetchDuckDuckGoSnippets(query);
-      snippetGroups.push(...snippets);
-    } catch (error) {
-      snippetGroups.push(`Search note for "${query}": ${error.message}`);
+async function recommendMovies(preferences) {
+  const searchQueries = buildRecommendationSearchQueries(preferences);
+  const searchResults = await Promise.allSettled(
+    searchQueries.map((query) => fetchDuckDuckGoSnippets(query))
+  );
+  const snippetGroups = searchResults.flatMap((result, index) => {
+    if (result.status === "fulfilled") {
+      return result.value;
     }
-  }
+    return [`Search note for "${searchQueries[index]}": ${result.reason?.message || "search unavailable"}`];
+  });
 
   const uniqueSnippets = [...new Set(snippetGroups)].slice(0, 12);
   return askGroqForRecommendations(preferences, uniqueSnippets);
@@ -373,6 +392,41 @@ function makeTelegramMessage(chatId, replyText, replyMarkup = null) {
   }
 
   return message;
+}
+
+async function sendTelegramStatus(chatId, text) {
+  const token = $env.TELEGRAM_BOT_TOKEN || "";
+  if (!token || !chatId) {
+    return;
+  }
+
+  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: true
+    })
+  }).catch(() => {});
+}
+
+async function buildRecommendationReply(normalized, preferences) {
+  if (preferences.length < 4) {
+    return {
+      replyText: "Please add a little more detail, such as genre, language, mood, length, or movies you liked."
+    };
+  }
+
+  clearSession(normalized);
+  await sendTelegramStatus(normalized.chatId, "Searching the web and matching your taste. This may take a few seconds...");
+  const recommendations = await recommendMovies(preferences);
+  return {
+    replyText: recommendations,
+    replyMarkup: mainMenuMarkup()
+  };
 }
 
 function webhookHeaderSecret(payloadHeaders) {
@@ -408,11 +462,7 @@ async function buildReply(normalized) {
   if (normalized.route === "recommend_command") {
     const preferences = (normalized.commandArg || "").trim();
     if (preferences.length >= 4) {
-      const recommendations = await recommendMovies(preferences);
-      return {
-        replyText: recommendations,
-        replyMarkup: mainMenuMarkup()
-      };
+      return buildRecommendationReply(normalized, preferences);
     }
 
     setSession(normalized, { mode: ACTIONS.RECOMMEND });
@@ -458,34 +508,12 @@ async function buildReply(normalized) {
   const session = getSession(normalized);
   if (session?.mode === ACTIONS.RECOMMEND) {
     const preferences = (normalized.text || "").trim();
-    if (preferences.length < 4) {
-      return {
-        replyText: "Please add a little more detail, such as genre, language, mood, or movies you liked."
-      };
-    }
-
-    clearSession(normalized);
-    const recommendations = await recommendMovies(preferences);
-    return {
-      replyText: recommendations,
-      replyMarkup: mainMenuMarkup()
-    };
+    return buildRecommendationReply(normalized, preferences);
   }
 
   if (normalized.route === "chat") {
     const preferences = (normalized.text || "").trim();
-    if (preferences.length < 4) {
-      return {
-        replyText: "Please add a little more detail, such as genre, language, mood, or movies you liked."
-      };
-    }
-
-    clearSession(normalized);
-    const recommendations = await recommendMovies(preferences);
-    return {
-      replyText: recommendations,
-      replyMarkup: mainMenuMarkup()
-    };
+    return buildRecommendationReply(normalized, preferences);
   }
 
   return {
