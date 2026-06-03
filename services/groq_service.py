@@ -114,7 +114,7 @@ Please provide:
 - 🎭 Genre
 - 📖 Story Summary (200-400 words, no major spoilers, mention central theme, setting, and key characters)
 
-Format it clearly and professionally. If the movie information is insufficient or unreliable, respond with: "Sorry, I couldn't find reliable information for that movie.""""
+Format it clearly and professionally. If the movie information is insufficient or unreliable, respond with: "Sorry, I couldn't find reliable information for that movie."""
 
         response = self._safe_api_call(
             [{"role": "user", "content": prompt}],
