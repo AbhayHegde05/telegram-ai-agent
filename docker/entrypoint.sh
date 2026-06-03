@@ -9,7 +9,7 @@ export N8N_EDITOR_BASE_URL="${N8N_EDITOR_BASE_URL:-}"
 
 mkdir -p /home/node/.n8n
 
-IMPORT_MARKER="/home/node/.n8n/.telegram-assistant-workflow-imported-v2"
+IMPORT_MARKER="/home/node/.n8n/.telegram-assistant-workflow-imported-v3"
 WORKFLOW_FILE="/opt/bootstrap/workflows/telegram-ai-assistant.json"
 WORKFLOW_ID="7f0f3df4-b71a-4f1a-ae6a-65b6f4e2a9a4"
 

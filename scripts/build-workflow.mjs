@@ -71,7 +71,7 @@ const workflow = {
         },
         sendBody: true,
         specifyBody: "json",
-        jsonBody: '={{ {"chat_id": $json.chatId, "text": $json.replyText, "disable_web_page_preview": true} }}',
+        jsonBody: '={{ $json.replyMarkup ? {"chat_id": $json.chatId, "text": $json.replyText, "disable_web_page_preview": true, "reply_markup": $json.replyMarkup} : {"chat_id": $json.chatId, "text": $json.replyText, "disable_web_page_preview": true} }}',
         options: {
           timeout: 30000
         }
