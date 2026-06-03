@@ -1,0 +1,108 @@
+"""
+Movie Brief handler
+Manages movie brief feature - asks for movie name and generates summary
+"""
+
+import logging
+from telegram import Update
+from telegram.ext import ContextTypes
+from telegram.error import TelegramError
+
+from keyboards.menu import get_start_menu_keyboard
+from utils.states import init_user_data, set_current_feature
+from services.groq_service import GroqService
+from services.search_service import SearchService
+
+logger = logging.getLogger(__name__)
+
+
+async def start_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Start the movie brief feature
+    Ask user to enter movie name
+    """
+    try:
+        query = update.callback_query
+        await query.answer()
+
+        init_user_data(context)
+        set_current_feature(context, 'brief')
+
+        await query.edit_message_text(
+            text="📖 Movie Brief\n\n"
+                 "Please enter the movie name.\n\n"
+                 "Example: Interstellar"
+        )
+    except TelegramError as e:
+        logger.error(f"Telegram error in start_brief: {e}")
+
+
+async def handle_brief_movie_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handle movie name input and generate brief
+    """
+    try:
+        movie_name = update.message.text.strip()
+
+        if not movie_name or len(movie_name) < 2:
+            await update.message.reply_text(
+                "❌ Please enter a valid movie name.\n\n"
+                "Example: Interstellar"
+            )
+            return
+
+        # Show processing message
+        processing_message = await update.message.reply_text(
+            f"🔍 Searching for '{movie_name}'...\n"
+            "📖 Generating summary...\n"
+            "⏳ Please wait..."
+        )
+
+        # Initialize services
+        try:
+            groq_service = GroqService()
+            search_service = SearchService()
+        except Exception as e:
+            logger.error(f"Error initializing services: {e}")
+            await processing_message.edit_text(
+                "❌ Service initialization error. Please try again."
+            )
+            return
+
+        # Search for movie information
+        try:
+            search_results = search_service.search_movie_info(movie_name)
+        except Exception as e:
+            logger.error(f"Search error: {e}")
+            search_results = f"Movie: {movie_name}\nSearch results unavailable. Please try another movie."
+
+        # Generate brief
+        try:
+            brief = groq_service.get_movie_brief(movie_name, search_results)
+            
+            if brief is None:
+                raise Exception("Groq returned None")
+        except Exception as e:
+            logger.error(f"Error generating brief: {e}")
+            brief = f"Sorry, I couldn't find reliable information for '{movie_name}'."
+
+        # Edit processing message with brief
+        await processing_message.edit_text(
+            text="📖 MOVIE BRIEF\n\n"
+                 + brief +
+                 "\n\n━━━━━━━━━━━━━━\n"
+                 "Would you like to try another feature?"
+        )
+
+        # Add menu options
+        await update.message.reply_text(
+            "Choose an option:",
+            reply_markup=get_start_menu_keyboard()
+        )
+
+    except Exception as e:
+        logger.error(f"Unexpected error in handle_brief_movie_name: {e}")
+        await update.message.reply_text(
+            text="❌ Sorry, an unexpected error occurred.\n\n"
+                 "Please try another movie name."
+        )

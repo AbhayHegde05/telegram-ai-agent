@@ -1,14 +1,26 @@
-FROM ghcr.io/n8n-io/n8n:2.19.5
+# Build stage
+FROM python:3.11-slim as builder
 
-USER root
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --user --no-cache-dir -r requirements.txt
 
-COPY docker/entrypoint.sh /entrypoint.sh
-COPY workflow-assets /opt/bootstrap/workflow-assets
-COPY workflows /opt/bootstrap/workflows
+# Runtime stage
+FROM python:3.11-slim
 
-RUN chmod +x /entrypoint.sh \
-    && chown -R node:node /entrypoint.sh /opt/bootstrap
+WORKDIR /app
 
-USER node
+# Copy Python dependencies from builder
+COPY --from=builder /root/.local /root/.local
+COPY . .
 
-ENTRYPOINT ["/entrypoint.sh"]
+# Set PATH to use pip installations
+ENV PATH=/root/.local/bin:$PATH \
+    PYTHONUNBUFFERED=1
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import os; print('ok')" || exit 1
+
+# Run the bot
+CMD ["python", "main.py"]
