@@ -9,6 +9,7 @@ from groq import Groq
 logger = logging.getLogger(__name__)
 
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+GROQ_BASE_URL = os.getenv('GROQ_BASE_URL', 'https://api.groq.com/openai/v1')
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
 
 
@@ -19,8 +20,23 @@ class GroqService:
         if not GROQ_API_KEY:
             raise ValueError("GROQ_API_KEY not found in environment variables")
         try:
-            self.client = Groq(api_key=GROQ_API_KEY)
+            # Initialize Groq client with minimal parameters
+            self.client = Groq(
+                api_key=GROQ_API_KEY,
+                base_url=GROQ_BASE_URL
+            )
             self.model = GROQ_MODEL
+            logger.info(f"✅ Groq client initialized successfully (Model: {self.model})")
+        except TypeError as e:
+            # If base_url causes issues, try without it
+            logger.warning(f"Retrying Groq initialization without base_url: {e}")
+            try:
+                self.client = Groq(api_key=GROQ_API_KEY)
+                self.model = GROQ_MODEL
+                logger.info(f"✅ Groq client initialized successfully (Model: {self.model})")
+            except Exception as retry_error:
+                logger.error(f"Failed to initialize Groq client: {retry_error}")
+                raise
         except Exception as e:
             logger.error(f"Failed to initialize Groq client: {e}")
             raise
@@ -37,13 +53,13 @@ class GroqService:
             Response text or error message
         """
         try:
-            response = self.client.messages.create(
+            response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=0.7
             )
-            return response.content[0].text
+            return response.choices[0].message.content
         except Exception as e:
             logger.error(f"Groq API error: {e}")
             return None
