@@ -18,9 +18,5 @@ COPY . .
 ENV PATH=/root/.local/bin:$PATH \
     PYTHONUNBUFFERED=1
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import os; print('ok')" || exit 1
-
 # Run the bot
 CMD ["python", "main.py"]
