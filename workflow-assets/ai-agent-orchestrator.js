@@ -352,12 +352,27 @@ function makeEnvelope(overrides = {}) {
     chatId: null,
     replyText: "",
     replyMarkup: null,
+    telegramMessage: null,
     httpBody: {
       ok: true,
       status: "ignored"
     },
     ...overrides
   };
+}
+
+function makeTelegramMessage(chatId, replyText, replyMarkup = null) {
+  const message = {
+    chat_id: chatId,
+    text: truncateTelegram(replyText),
+    disable_web_page_preview: true
+  };
+
+  if (replyMarkup) {
+    message.reply_markup = replyMarkup;
+  }
+
+  return message;
 }
 
 function webhookHeaderSecret(payloadHeaders) {
@@ -502,13 +517,15 @@ async function main() {
 
   try {
     const reply = await buildReply(normalized);
+    const replyText = truncateTelegram(reply.replyText);
     return [
       {
         json: makeEnvelope({
           shouldSend: true,
           chatId: normalized.chatId,
-          replyText: truncateTelegram(reply.replyText),
+          replyText,
           replyMarkup: reply.replyMarkup ?? null,
+          telegramMessage: makeTelegramMessage(normalized.chatId, replyText, reply.replyMarkup ?? null),
           route: normalized.route,
           telegramId: normalized.telegramId,
           httpBody: {
@@ -533,6 +550,13 @@ async function main() {
             "Please try again with /recommend, or adjust the preferences."
           ].join("\n")),
           replyMarkup: mainMenuMarkup(),
+          telegramMessage: makeTelegramMessage(normalized.chatId, [
+            "I could not complete the movie recommendation request this time.",
+            "",
+            `Reason: ${error.message}`,
+            "",
+            "Please try again with /recommend, or adjust the preferences."
+          ].join("\n"), mainMenuMarkup()),
           route: normalized.route,
           telegramId: normalized.telegramId,
           httpBody: {
