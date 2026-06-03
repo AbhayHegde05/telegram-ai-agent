@@ -45,33 +45,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await start_menu(update, context)
 
 
-async def main() -> None:
-    """Start the bot"""
-    # Create the Application
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-    # Command handlers
-    application.add_handler(CommandHandler("start", start))
-
-    # Callback query handlers for menu
-    application.add_handler(CallbackQueryHandler(start_recommendation, pattern="^rec_start$"))
-    application.add_handler(CallbackQueryHandler(start_brief, pattern="^brief_start$"))
-    application.add_handler(CallbackQueryHandler(start_review, pattern="^review_start$"))
-
-    # Recommendation flow handlers
-    application.add_handler(CallbackQueryHandler(handle_language_selection, pattern="^rec_lang_"))
-    application.add_handler(CallbackQueryHandler(handle_genre_selection, pattern="^rec_genre_"))
-    application.add_handler(CallbackQueryHandler(handle_duration_selection, pattern="^rec_duration_"))
-    application.add_handler(CallbackQueryHandler(handle_release_preference, pattern="^rec_release_"))
-    application.add_handler(CallbackQueryHandler(handle_mood_preference, pattern="^rec_mood_"))
-
-    # Brief and Review text input handlers
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_brief_or_review_input))
-
-    # Run the bot
-    await application.run_polling()
-
-
 async def handle_brief_or_review_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Route text input to brief or review handlers based on current state
@@ -94,5 +67,25 @@ async def handle_brief_or_review_input(update: Update, context: ContextTypes.DEF
 
 
 if __name__ == '__main__':
-    import asyncio
-    asyncio.run(main())
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Command handlers
+    application.add_handler(CommandHandler("start", start))
+
+    # Callback query handlers for menu
+    application.add_handler(CallbackQueryHandler(start_recommendation, pattern="^rec_start$"))
+    application.add_handler(CallbackQueryHandler(start_brief, pattern="^brief_start$"))
+    application.add_handler(CallbackQueryHandler(start_review, pattern="^review_start$"))
+
+    # Recommendation flow handlers
+    application.add_handler(CallbackQueryHandler(handle_language_selection, pattern="^rec_lang_"))
+    application.add_handler(CallbackQueryHandler(handle_genre_selection, pattern="^rec_genre_"))
+    application.add_handler(CallbackQueryHandler(handle_duration_selection, pattern="^rec_duration_"))
+    application.add_handler(CallbackQueryHandler(handle_release_preference, pattern="^rec_release_"))
+    application.add_handler(CallbackQueryHandler(handle_mood_preference, pattern="^rec_mood_"))
+
+    # Brief and Review text input handlers
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_brief_or_review_input))
+
+    logger.info("🤖 Bot started successfully!")
+    application.run_polling()
