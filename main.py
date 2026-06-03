@@ -4,14 +4,12 @@ Handles /start command and routes to appropriate handlers
 """
 
 import logging
-import asyncio
-import signal
 import sys
-from telegram import Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from telegram.error import Conflict, NetworkError, BadRequest
 import os
 from dotenv import load_dotenv
+from telegram import Update
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.error import Conflict, NetworkError
 
 # Import handlers
 from handlers.recommendation import (
@@ -39,7 +37,10 @@ logger = logging.getLogger(__name__)
 # Get bot token
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN not found in environment variables")
+    logger.critical("❌ TELEGRAM_BOT_TOKEN not found in environment variables")
+    sys.exit(1)
+
+logger.info(f"✅ Bot token loaded: {TELEGRAM_BOT_TOKEN[:20]}...")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -76,89 +77,57 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     error = context.error
     
     if isinstance(error, Conflict):
-        logger.error(f"⚠️ Conflict error (another instance running?): {error}")
-        logger.info("Shutting down gracefully to resolve conflict...")
-        # Don't crash - let container restart
+        logger.error(f"⚠️ Conflict error (multiple instances?): {error}")
         return
     
-    if isinstance(error, (NetworkError, BadRequest)):
-        logger.warning(f"Network error (will retry): {error}")
-        # These are transient - just log and continue
+    if isinstance(error, NetworkError):
+        logger.warning(f"⚠️ Network error (transient): {error}")
         return
     
-    logger.error(f"Unhandled error: {error}")
+    logger.error(f"❌ Error: {type(error).__name__}: {error}")
 
 
-async def main_with_retry(max_retries: int = 5, retry_delay: int = 5) -> None:
-    """
-    Run the bot with automatic retry on conflict
-    """
-    retry_count = 0
-    
-    while retry_count < max_retries:
-        try:
-            application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+def main():
+    """Start the bot"""
+    try:
+        logger.info("🚀 Starting Telegram Movie Assistant Bot...")
+        
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-            # Error handler
-            application.add_error_handler(error_handler)
+        # Error handler
+        application.add_error_handler(error_handler)
 
-            # Command handlers
-            application.add_handler(CommandHandler("start", start))
+        # Command handlers
+        application.add_handler(CommandHandler("start", start))
 
-            # Callback query handlers for menu
-            application.add_handler(CallbackQueryHandler(start_recommendation, pattern="^rec_start$"))
-            application.add_handler(CallbackQueryHandler(start_brief, pattern="^brief_start$"))
-            application.add_handler(CallbackQueryHandler(start_review, pattern="^review_start$"))
+        # Callback query handlers for menu
+        application.add_handler(CallbackQueryHandler(start_recommendation, pattern="^rec_start$"))
+        application.add_handler(CallbackQueryHandler(start_brief, pattern="^brief_start$"))
+        application.add_handler(CallbackQueryHandler(start_review, pattern="^review_start$"))
 
-            # Recommendation flow handlers
-            application.add_handler(CallbackQueryHandler(handle_language_selection, pattern="^rec_lang_"))
-            application.add_handler(CallbackQueryHandler(handle_genre_selection, pattern="^rec_genre_"))
-            application.add_handler(CallbackQueryHandler(handle_duration_selection, pattern="^rec_duration_"))
-            application.add_handler(CallbackQueryHandler(handle_release_preference, pattern="^rec_release_"))
-            application.add_handler(CallbackQueryHandler(handle_mood_preference, pattern="^rec_mood_"))
+        # Recommendation flow handlers
+        application.add_handler(CallbackQueryHandler(handle_language_selection, pattern="^rec_lang_"))
+        application.add_handler(CallbackQueryHandler(handle_genre_selection, pattern="^rec_genre_"))
+        application.add_handler(CallbackQueryHandler(handle_duration_selection, pattern="^rec_duration_"))
+        application.add_handler(CallbackQueryHandler(handle_release_preference, pattern="^rec_release_"))
+        application.add_handler(CallbackQueryHandler(handle_mood_preference, pattern="^rec_mood_"))
 
-            # Brief and Review text input handlers
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_brief_or_review_input))
+        # Brief and Review text input handlers
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_brief_or_review_input))
 
-            logger.info("🤖 Bot started successfully!")
-            
-            # Run with polling
-            await application.run_polling(
-                allowed_updates=Update.ALL_TYPES,
-                timeout=30,
-                read_latency=60.0
-            )
-            
-            # If we get here, polling stopped normally
-            break
-            
-        except Conflict as e:
-            retry_count += 1
-            logger.error(f"❌ Conflict error (attempt {retry_count}/{max_retries}): {e}")
-            
-            if retry_count < max_retries:
-                logger.info(f"⏳ Retrying in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
-                # Increase delay for next retry
-                retry_delay = min(retry_delay * 2, 60)
-            else:
-                logger.critical("Max retries reached. Exiting.")
-                sys.exit(1)
-                
-        except (NetworkError, BadRequest) as e:
-            logger.warning(f"Network error: {e}. Retrying in 10 seconds...")
-            await asyncio.sleep(10)
-            
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            sys.exit(1)
+        logger.info("🤖 Bot started successfully!")
+        
+        # Run the bot
+        application.run_polling()
+        
+    except Conflict as e:
+        logger.error(f"⚠️ Conflict: {e}")
+        logger.info("Another bot instance is running with this token.")
+        sys.exit(1)
+    except Exception as e:
+        logger.critical(f"❌ Fatal error: {type(e).__name__}: {e}", exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(main_with_retry())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-    except Exception as e:
-        logger.critical(f"Fatal error: {e}")
-        sys.exit(1)
+    main()
