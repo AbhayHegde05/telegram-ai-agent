@@ -15,9 +15,14 @@ class SearchService:
     """Service for web search and movie information gathering"""
 
     def __init__(self):
-        self.timeout = 10
+        self.timeout = 15
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
         }
 
     def search_movies(self, query: str, num_results: int = 10) -> str:
@@ -32,7 +37,7 @@ class SearchService:
             Formatted search results string
         """
         try:
-            # Using DuckDuckGo HTML search
+            # Using DuckDuckGo HTML search with more robust headers
             url = "https://html.duckduckgo.com/"
             params = {
                 'q': query,
@@ -92,6 +97,7 @@ class SearchService:
             params = {'q': query}
             
             response = requests.get(url, params=params, headers=self.headers, timeout=self.timeout)
+            response.raise_for_status()
             
             # Extract snippets from Google results
             import re
