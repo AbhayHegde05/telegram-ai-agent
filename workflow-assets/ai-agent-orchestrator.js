@@ -237,109 +237,6 @@ function plainTextFromHtml(html) {
     .trim();
 }
 
-async function fetchDuckDuckGoSnippets(query) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 7000);
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const response = await fetch(url, {
-    signal: controller.signal,
-    headers: {
-      "User-Agent": "Mozilla/5.0 TelegramMovieBot/1.0"
-    }
-  }).finally(() => clearTimeout(timeout));
-
-  if (!response.ok) {
-    throw new Error(`Search failed with HTTP ${response.status}`);
-  }
-
-  const html = await response.text();
-  const snippets = [];
-  const resultRegex = /<a[^>]+class="[^"]*result__a[^"]*"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
-  let match;
-
-  while ((match = resultRegex.exec(html)) && snippets.length < 8) {
-    const title = plainTextFromHtml(match[1]);
-    const snippet = plainTextFromHtml(match[2]);
-    if (title || snippet) {
-      snippets.push(`${title}: ${snippet}`.trim());
-    }
-  }
-
-  if (snippets.length > 0) {
-    return snippets;
-  }
-
-  const compact = plainTextFromHtml(html);
-  return compact ? [compact.slice(0, 1800)] : [];
-}
-
-async function askGroqForRecommendations(preferences, searchSnippets) {
-  const apiKey = $env.GROQ_API_KEY || "";
-  if (!apiKey) {
-    throw new Error("GROQ_API_KEY is not configured.");
-  }
-
-  const baseUrl = ($env.GROQ_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/+$/, "");
-  const model = $env.GROQ_MODEL || "llama-3.3-70b-versatile";
-  const systemPrompt = [
-    "You are a sharp movie recommendation assistant for Telegram.",
-    "First understand the user's free-form request, including genre, language, runtime, mood, exclusions, and examples.",
-    "Use the supplied web search snippets as supporting context. If snippets are weak, rely on your film knowledge and say that web evidence was limited.",
-    "Return exactly 5 movies that best match the user's preferences.",
-    "Avoid spoilers.",
-    "Do not recommend series unless the user asks for series.",
-    "Prefer real, released movies.",
-    "Use this exact plain-text format:",
-    "Top 5 movie matches",
-    "",
-    "1. Title (Year)",
-    "Genre/language: ...",
-    "Why it fits: ...",
-    "Match score: x/10",
-    "",
-    "Keep each movie to 2-3 short lines and end with: Want a brief for any one of these?"
-  ].join(" ");
-
-  const userPrompt = [
-    `User preferences: ${preferences}`,
-    "",
-    "Web search snippets:",
-    searchSnippets.length ? searchSnippets.map((snippet, index) => `${index + 1}. ${snippet}`).join("\n") : "No snippets were found.",
-    "",
-    "Format the answer for Telegram in plain text. Keep it concise and readable."
-  ].join("\n");
-
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.45,
-      max_tokens: 1100,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ]
-    })
-  });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = payload?.error?.message || `HTTP ${response.status}`;
-    throw new Error(`Groq request failed: ${detail}`);
-  }
-
-  const content = payload?.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("Groq did not return a recommendation.");
-  }
-
-  return content;
-}
-
 function buildRecommendationSearchQueries(preferences) {
   return [
     `${preferences} best movies recommendations`,
@@ -349,29 +246,17 @@ function buildRecommendationSearchQueries(preferences) {
   ];
 }
 
-async function recommendMovies(preferences) {
-  const searchQueries = buildRecommendationSearchQueries(preferences);
-  const searchResults = await Promise.allSettled(
-    searchQueries.map((query) => fetchDuckDuckGoSnippets(query))
-  );
-  const snippetGroups = searchResults.flatMap((result, index) => {
-    if (result.status === "fulfilled") {
-      return result.value;
-    }
-    return [`Search note for "${searchQueries[index]}": ${result.reason?.message || "search unavailable"}`];
-  });
-
-  const uniqueSnippets = [...new Set(snippetGroups)].slice(0, 12);
-  return askGroqForRecommendations(preferences, uniqueSnippets);
-}
-
 function makeEnvelope(overrides = {}) {
   return {
     shouldSend: false,
+    shouldRecommend: false,
     chatId: null,
     replyText: "",
     replyMarkup: null,
     telegramMessage: null,
+    preferences: "",
+    searchQuery: "",
+    statusMessage: "",
     httpBody: {
       ok: true,
       status: "ignored"
@@ -394,25 +279,6 @@ function makeTelegramMessage(chatId, replyText, replyMarkup = null) {
   return message;
 }
 
-async function sendTelegramStatus(chatId, text) {
-  const token = $env.TELEGRAM_BOT_TOKEN || "";
-  if (!token || !chatId) {
-    return;
-  }
-
-  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      disable_web_page_preview: true
-    })
-  }).catch(() => {});
-}
-
 async function buildRecommendationReply(normalized, preferences) {
   if (preferences.length < 4) {
     return {
@@ -421,11 +287,11 @@ async function buildRecommendationReply(normalized, preferences) {
   }
 
   clearSession(normalized);
-  await sendTelegramStatus(normalized.chatId, "Searching the web and matching your taste. This may take a few seconds...");
-  const recommendations = await recommendMovies(preferences);
   return {
-    replyText: recommendations,
-    replyMarkup: mainMenuMarkup()
+    recommend: true,
+    preferences,
+    searchQuery: buildRecommendationSearchQueries(preferences)[0],
+    statusMessage: "Searching the web and matching your taste. This may take a few seconds..."
   };
 }
 
@@ -570,6 +436,27 @@ async function main() {
 
   try {
     const reply = await buildReply(normalized);
+    if (reply.recommend) {
+      return [
+        {
+          json: makeEnvelope({
+            shouldRecommend: true,
+            chatId: normalized.chatId,
+            preferences: reply.preferences,
+            searchQuery: reply.searchQuery,
+            statusMessage: reply.statusMessage,
+            route: normalized.route,
+            telegramId: normalized.telegramId,
+            httpBody: {
+              ok: true,
+              status: "recommendation_requested",
+              route: normalized.route
+            }
+          })
+        }
+      ];
+    }
+
     const replyText = truncateTelegram(reply.replyText);
     return [
       {
