@@ -55,8 +55,8 @@ async def handle_brief_or_review_input(update: Update, context: ContextTypes.DEF
     Route text input to brief or review handlers based on current state
     """
     # Initialize user data if needed
-    if not context.user_data:
-        context.user_data = {}
+    if context.user_data is None:
+        return
 
     current_feature = context.user_data.get('current_feature')
 

@@ -4,3 +4,5 @@
 n8n_data/
 docker-data/
 
+*.log
+__pycache__/
