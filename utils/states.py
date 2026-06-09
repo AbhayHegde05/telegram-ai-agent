@@ -61,7 +61,7 @@ class RecommendationPreferences:
 
 def init_user_data(context):
     """Initialize user data if not already done"""
-    if not context.user_data:
+    if 'preferences' not in context.user_data:
         context.user_data['preferences'] = RecommendationPreferences()
         context.user_data['current_feature'] = None
         context.user_data['current_state'] = UserState.START

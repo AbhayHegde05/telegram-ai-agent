@@ -22,21 +22,10 @@ class GroqService:
         try:
             # Initialize Groq client with minimal parameters
             self.client = Groq(
-                api_key=GROQ_API_KEY,
-                base_url=GROQ_BASE_URL
+                api_key=GROQ_API_KEY
             )
             self.model = GROQ_MODEL
             logger.info(f"✅ Groq client initialized successfully (Model: {self.model})")
-        except TypeError as e:
-            # If base_url causes issues, try without it
-            logger.warning(f"Retrying Groq initialization without base_url: {e}")
-            try:
-                self.client = Groq(api_key=GROQ_API_KEY)
-                self.model = GROQ_MODEL
-                logger.info(f"✅ Groq client initialized successfully (Model: {self.model})")
-            except Exception as retry_error:
-                logger.error(f"Failed to initialize Groq client: {retry_error}")
-                raise
         except Exception as e:
             logger.error(f"Failed to initialize Groq client: {e}")
             raise
