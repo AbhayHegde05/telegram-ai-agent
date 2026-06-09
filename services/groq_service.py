@@ -61,13 +61,14 @@ class GroqService:
                 logger.info(f"Groq API call successful")
                 return response.choices[0].message.content
             except Exception as e:
-                logger.error(f"Groq API error (attempt {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
+                error_msg = f"{type(e).__name__}: {e}"
+                logger.error(f"Groq API error (attempt {attempt + 1}/{max_retries}): {error_msg}")
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)
                     logger.info(f"Retrying in {delay}s...")
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(f"All {max_retries} Groq API attempts failed")
+                    logger.error(f"All {max_retries} Groq API attempts failed. Last error: {error_msg}")
                     return None
 
     async def get_movie_recommendations(self, preferences: dict, search_results: str) -> str:
