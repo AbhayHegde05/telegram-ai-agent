@@ -7,6 +7,10 @@ import logging
 import sys
 import os
 from dotenv import load_dotenv
+
+# Load environment variables FIRST, before importing anything that reads env vars
+load_dotenv()
+
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.error import Conflict, NetworkError
@@ -27,9 +31,6 @@ from keyboards.menu import start_menu, get_start_menu_keyboard
 from utils.helpers import rate_limiter
 from utils.states import clear_feature_state, RecommendationPreferences
 from utils.memory import init_db, load_user_data, save_user_data, add_history
-
-# Load environment variables
-load_dotenv()
 
 # Initialize SQLite memory database
 init_db()
