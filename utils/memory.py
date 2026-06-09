@@ -52,26 +52,19 @@ def init_db() -> None:
             )
         """)
 
-        # Keep only last 50 history entries per user (simple approach)
-        cursor.execute("""
-            DELETE FROM user_history
-            WHERE id IN (
-                SELECT h.id FROM user_history h
-                INNER JOIN (
-                    SELECT user_id, COUNT(*) as cnt
-                    FROM user_history
-                    GROUP BY user_id
-                    HAVING cnt > 50
-                ) sub ON h.user_id = sub.user_id
-                ORDER BY h.timestamp ASC
-                LIMIT (SELECT MAX(cnt) - 50 FROM (SELECT COUNT(*) as cnt FROM user_history GROUP BY user_id HAVING cnt > 50))
-            )
-        """)
-        # Fallback: just delete entries older than 7 days
+        # Clean up old history entries (older than 7 days)
         cursor.execute(
             "DELETE FROM user_history WHERE timestamp < ?",
             (time.time() - 7 * 24 * 3600,)
         )
+        # Also cap at 50 entries per user
+        cursor.execute("""
+            DELETE FROM user_history WHERE id NOT IN (
+                SELECT id FROM user_history
+                ORDER BY timestamp DESC
+                LIMIT 500
+            )
+        """)
 
         conn.commit()
         conn.close()
