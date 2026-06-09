@@ -10,7 +10,8 @@ from telegram.error import TelegramError
 
 from keyboards.menu import get_start_menu_keyboard
 from utils.states import init_user_data, set_current_feature
-from services.groq_service import GroqService
+from utils.helpers import split_message, sanitize_movie_name, is_valid_movie_name
+from services.groq_service import get_groq_service
 from services.search_service import SearchService
 
 logger = logging.getLogger(__name__)
@@ -42,11 +43,11 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
     Handle movie name input and generate comprehensive review
     """
     try:
-        movie_name = update.message.text.strip()
+        movie_name = sanitize_movie_name(update.message.text)
 
-        if not movie_name or len(movie_name) < 2:
+        if not is_valid_movie_name(movie_name):
             await update.message.reply_text(
-                "❌ Please enter a valid movie name.\n\n"
+                "❌ Please enter a valid movie name (at least 2 characters).\n\n"
                 "Example: The Dark Knight"
             )
             return
@@ -61,7 +62,7 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
 
         # Initialize services
         try:
-            groq_service = GroqService()
+            groq_service = get_groq_service()
             search_service = SearchService()
         except Exception as e:
             logger.error(f"Error initializing services: {e}")
@@ -72,14 +73,14 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
 
         # Search for movie reviews and ratings
         try:
-            search_results = search_service.search_movie_reviews(movie_name)
+            search_results = await search_service.search_movie_reviews(movie_name)
         except Exception as e:
             logger.error(f"Search error: {e}")
             search_results = f"Movie: {movie_name}\nSearch results unavailable. Please try another movie."
 
         # Generate comprehensive review
         try:
-            review = groq_service.get_movie_review(movie_name, search_results)
+            review = await groq_service.get_movie_review(movie_name, search_results)
             
             if review is None:
                 raise Exception("Groq returned None")
@@ -87,31 +88,23 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
             logger.error(f"Error generating review: {e}")
             review = f"Sorry, I couldn't find reliable review information for '{movie_name}'."
 
-        # Split review into chunks if it's too long (Telegram has message length limits)
-        max_length = 4000
-        if len(review) > max_length:
-            # Edit first message with header and beginning of review
-            header = f"⭐ MOVIE REVIEW\n\n{movie_name}\n\n━━━━━━━━━━━━━━\n\n"
-            remaining = review
+        # Build the full response
+        full_response = (
+            "⭐ MOVIE REVIEW\n\n"
+            + review +
+            "\n\n━━━━━━━━━━━━━━\n"
+            "Would you like to review another movie or try a different feature?"
+        )
 
-            # Send header and first part
-            await processing_message.edit_text(
-                text=header + remaining[:max_length - len(header)]
-            )
-
-            # Send remaining parts
-            remaining = remaining[max_length - len(header):]
-            while remaining:
-                await update.message.reply_text(remaining[:max_length])
-                remaining = remaining[max_length:]
-        else:
-            # Send complete review in one message
-            await processing_message.edit_text(
-                text="⭐ MOVIE REVIEW\n\n"
-                     + review +
-                     "\n\n━━━━━━━━━━━━━━\n"
-                     "Would you like to review another movie or try a different feature?"
-            )
+        # Split and send in chunks
+        chunks = split_message(full_response)
+        
+        # Edit the processing message with first chunk
+        await processing_message.edit_text(text=chunks[0])
+        
+        # Send remaining chunks as new messages
+        for chunk in chunks[1:]:
+            await update.message.reply_text(chunk)
 
         # Add menu options
         await update.message.reply_text(
@@ -121,7 +114,10 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
 
     except Exception as e:
         logger.error(f"Unexpected error in handle_review_movie_name: {e}")
-        await update.message.reply_text(
-            text="❌ Sorry, an unexpected error occurred.\n\n"
-                 "Please try another movie name."
-        )
+        try:
+            await update.message.reply_text(
+                text="❌ Sorry, an unexpected error occurred.\n\n"
+                     "Please try another movie name."
+            )
+        except:
+            pass

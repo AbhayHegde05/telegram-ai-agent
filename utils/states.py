@@ -54,16 +54,30 @@ class RecommendationPreferences:
             'mood': self.mood
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> 'RecommendationPreferences':
+        """Create a RecommendationPreferences instance from a dictionary."""
+        instance = cls()
+        instance.language = data.get('language')
+        instance.genre = data.get('genre')
+        instance.duration = data.get('duration')
+        instance.release = data.get('release')
+        instance.mood = data.get('mood')
+        return instance
+
     def __str__(self):
         """String representation for logging"""
         return f"Language: {self.language}, Genre: {self.genre}, Duration: {self.duration}, Release: {self.release}, Mood: {self.mood}"
 
 
 def init_user_data(context):
-    """Initialize user data if not already done"""
-    if not context.user_data:
+    """Initialize user data if not already done, or repair partial data"""
+    # Ensure all required keys exist, even if user_data was partially populated
+    if 'preferences' not in context.user_data:
         context.user_data['preferences'] = RecommendationPreferences()
+    if 'current_feature' not in context.user_data:
         context.user_data['current_feature'] = None
+    if 'current_state' not in context.user_data:
         context.user_data['current_state'] = UserState.START
 
 
@@ -83,3 +97,4 @@ def clear_feature_state(context) -> None:
     """Clear feature-specific state"""
     context.user_data['preferences'] = RecommendationPreferences()
     context.user_data['current_feature'] = None
+    context.user_data['current_state'] = UserState.START

@@ -16,8 +16,10 @@ from keyboards.menu import (
     get_mood_preference_keyboard,
     get_start_menu_keyboard
 )
-from utils.states import init_user_data, get_preferences, set_current_feature
-from services.groq_service import GroqService
+from utils.states import init_user_data, get_preferences, set_current_feature, RecommendationPreferences
+from utils.helpers import split_message
+from utils.memory import load_user_data, save_user_data, add_history
+from services.groq_service import get_groq_service
 from services.search_service import SearchService
 
 logger = logging.getLogger(__name__)
@@ -31,6 +33,16 @@ async def start_recommendation(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         query = update.callback_query
         await query.answer()
+
+        user_id = update.effective_user.id if update.effective_user else None
+
+        # Load saved preferences if available
+        if user_id:
+            saved = load_user_data(user_id)
+            if saved and saved.get('preferences'):
+                context.user_data.update(saved)
+                if isinstance(saved['preferences'], dict):
+                    context.user_data['preferences'] = RecommendationPreferences.from_dict(saved['preferences'])
 
         init_user_data(context)
         set_current_feature(context, 'recommendation')
@@ -187,6 +199,11 @@ async def handle_mood_preference(update: Update, context: ContextTypes.DEFAULT_T
         preferences = get_preferences(context)
         preferences.mood = mood
 
+        # Save completed preferences to SQLite
+        if user_id:
+            save_user_data(user_id, preferences.to_dict(), None)
+            add_history(user_id, 'recommendation', str(preferences), 'recommendations_generated')
+
         # Show processing message
         await query.edit_message_text(
             text="✅ Mood preference selected: " + mood + "\n\n"
@@ -211,7 +228,7 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
 
         # Initialize services
         try:
-            groq_service = GroqService()
+            groq_service = get_groq_service()
             search_service = SearchService()
         except Exception as e:
             logger.error(f"Error initializing services: {e}")
@@ -222,21 +239,21 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
 
         # Generate search query
         try:
-            search_query = groq_service.generate_search_query(preferences.to_dict())
+            search_query = await groq_service.generate_search_query(preferences.to_dict())
         except Exception as e:
             logger.error(f"Error generating search query: {e}")
             search_query = f"{preferences.genre} movies"
 
         # Search for movies
         try:
-            search_results = search_service.search_movies(search_query, num_results=10)
+            search_results = await search_service.search_movies(search_query, num_results=10)
         except Exception as e:
             logger.error(f"Search error: {e}")
             search_results = "Unable to search movies. Using general information."
 
         # Get recommendations from Groq
         try:
-            recommendations = groq_service.get_movie_recommendations(
+            recommendations = await groq_service.get_movie_recommendations(
                 preferences.to_dict(),
                 search_results
             )
@@ -247,16 +264,25 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
             logger.error(f"Error generating recommendations: {e}")
             recommendations = "Sorry, I couldn't generate recommendations at this time. Please try again."
 
-        # Send recommendations
-        await query.edit_message_text(
-            text="🎬 TOP 5 MOVIE RECOMMENDATIONS\n\n"
-                 + recommendations +
-                 "\n\n━━━━━━━━━━━━━━\n"
-                 "Would you like another recommendation or try a different feature?"
+        # Build the full response
+        full_response = (
+            "🎬 TOP 5 MOVIE RECOMMENDATIONS\n\n"
+            + recommendations +
+            "\n\n━━━━━━━━━━━━━━\n"
+            "Would you like another recommendation or try a different feature?"
         )
 
+        # Split and send in chunks if needed
+        chunks = split_message(full_response)
+        
+        # Edit the processing message with first chunk
+        await query.edit_message_text(text=chunks[0])
+        
+        # Send remaining chunks as new messages
+        for chunk in chunks[1:]:
+            await query.message.reply_text(chunk)
+
         # Add option to start again
-        from keyboards.menu import get_start_menu_keyboard
         await query.message.reply_text(
             "Choose an option:",
             reply_markup=get_start_menu_keyboard()
@@ -264,12 +290,11 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
 
     except Exception as e:
         logger.error(f"Unexpected error in generate_recommendations: {e}")
-        await query.edit_message_text(
-            text="❌ Sorry, an unexpected error occurred.\n\n"
-                 "Please try again."
-        )
         try:
-            from keyboards.menu import get_start_menu_keyboard
+            await query.edit_message_text(
+                text="❌ Sorry, an unexpected error occurred.\n\n"
+                     "Please try again."
+            )
             await query.message.reply_text(
                 "Choose an option:",
                 reply_markup=get_start_menu_keyboard()

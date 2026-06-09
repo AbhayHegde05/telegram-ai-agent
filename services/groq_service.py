@@ -4,13 +4,17 @@ Groq API service for LLM responses
 
 import os
 import logging
-from groq import Groq
+import asyncio
+from groq import AsyncGroq
 
 logger = logging.getLogger(__name__)
 
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 GROQ_BASE_URL = os.getenv('GROQ_BASE_URL', 'https://api.groq.com')
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
+
+# Module-level singleton instance
+_groq_service_instance = None
 
 
 class GroqService:
@@ -20,18 +24,16 @@ class GroqService:
         if not GROQ_API_KEY:
             raise ValueError("GROQ_API_KEY not found in environment variables")
         try:
-            # Initialize Groq client with minimal parameters
-            self.client = Groq(
+            self.client = AsyncGroq(
                 api_key=GROQ_API_KEY,
                 base_url=GROQ_BASE_URL
             )
             self.model = GROQ_MODEL
             logger.info(f"✅ Groq client initialized successfully (Model: {self.model})")
         except TypeError as e:
-            # If base_url causes issues, try without it
             logger.warning(f"Retrying Groq initialization without base_url: {e}")
             try:
-                self.client = Groq(api_key=GROQ_API_KEY)
+                self.client = AsyncGroq(api_key=GROQ_API_KEY)
                 self.model = GROQ_MODEL
                 logger.info(f"✅ Groq client initialized successfully (Model: {self.model})")
             except Exception as retry_error:
@@ -41,37 +43,45 @@ class GroqService:
             logger.error(f"Failed to initialize Groq client: {e}")
             raise
 
-    def _safe_api_call(self, messages: list, max_tokens: int = 1000) -> str:
+    async def _safe_api_call(self, messages: list, max_tokens: int = 1000) -> str:
         """
-        Make a safe API call to Groq with error handling
-        
+        Make a safe API call to Groq with retry logic
+
         Args:
             messages: List of message dictionaries
             max_tokens: Maximum tokens in response
-        
-        Returns:
-            Response text or error message
-        """
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=0.7
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Groq API error: {e}")
-            return None
 
-    def get_movie_recommendations(self, preferences: dict, search_results: str) -> str:
+        Returns:
+            Response text or None on failure
+        """
+        max_retries = 3
+        base_delay = 1
+
+        for attempt in range(max_retries):
+            try:
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.7
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.error(f"Groq API error (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    await asyncio.sleep(delay)
+                else:
+                    return None
+
+    async def get_movie_recommendations(self, preferences: dict, search_results: str) -> str:
         """
         Generate movie recommendations based on user preferences and search results
-        
+
         Args:
             preferences: Dictionary with language, genre, duration, release, mood
             search_results: String containing movie search results
-        
+
         Returns:
             Formatted recommendations string
         """
@@ -98,24 +108,24 @@ For each movie, provide:
 
 Format each movie clearly with these emojis and information. Only recommend movies that actually match the user's preferences."""
 
-        response = self._safe_api_call(
+        response = await self._safe_api_call(
             [{"role": "user", "content": prompt}],
             max_tokens=2000
         )
-        
+
         if response is None:
             return "Sorry, I couldn't generate recommendations at this time. Please try again."
-        
+
         return response
 
-    def get_movie_brief(self, movie_name: str, search_results: str) -> str:
+    async def get_movie_brief(self, movie_name: str, search_results: str) -> str:
         """
         Generate a spoiler-controlled movie brief
-        
+
         Args:
             movie_name: Name of the movie
             search_results: Search results containing movie information
-        
+
         Returns:
             Formatted movie brief
         """
@@ -130,26 +140,26 @@ Please provide:
 - 🎭 Genre
 - 📖 Story Summary (200-400 words, no major spoilers, mention central theme, setting, and key characters)
 
-Format it clearly and professionally. If the movie information is insufficient or unreliable, respond with: "Sorry, I couldn't find reliable information for that movie."""
+Format it clearly and professionally. If the movie information is insufficient or unreliable, respond with: "Sorry, I couldn't find reliable information for that movie." """
 
-        response = self._safe_api_call(
+        response = await self._safe_api_call(
             [{"role": "user", "content": prompt}],
             max_tokens=1500
         )
-        
+
         if response is None:
             return "Sorry, I couldn't generate a brief at this time. Please try again."
-        
+
         return response
 
-    def get_movie_review(self, movie_name: str, search_results: str) -> str:
+    async def get_movie_review(self, movie_name: str, search_results: str) -> str:
         """
         Generate a structured movie review
-        
+
         Args:
             movie_name: Name of the movie
             search_results: Search results with reviews and ratings
-        
+
         Returns:
             Formatted structured review
         """
@@ -174,23 +184,23 @@ Please provide a detailed review with the following sections. For each section, 
 
 Format with clear separators (━━━━━━━━━━━━━━) between sections. Use the exact emojis provided."""
 
-        response = self._safe_api_call(
+        response = await self._safe_api_call(
             [{"role": "user", "content": prompt}],
             max_tokens=3000
         )
-        
+
         if response is None:
             return "Sorry, I couldn't generate a review at this time. Please try again."
-        
+
         return response
 
-    def generate_search_query(self, preferences: dict) -> str:
+    async def generate_search_query(self, preferences: dict) -> str:
         """
         Generate an optimized search query from preferences
-        
+
         Args:
             preferences: Dictionary with language, genre, duration, release, mood
-        
+
         Returns:
             Search query string
         """
@@ -203,14 +213,22 @@ Format with clear separators (━━━━━━━━━━━━━━) betwee
 
 Respond with ONLY the search query, nothing else."""
 
-        response = self._safe_api_call(
+        response = await self._safe_api_call(
             [{"role": "user", "content": prompt}],
             max_tokens=100
         )
-        
+
         if response is None:
             # Fallback to basic query if API fails
             genre = preferences.get('genre', 'movies')
             return f"{genre} movies {preferences.get('language', '').lower()}".strip()
-        
+
         return response.strip()
+
+
+def get_groq_service() -> GroqService:
+    """Get or create the singleton GroqService instance"""
+    global _groq_service_instance
+    if _groq_service_instance is None:
+        _groq_service_instance = GroqService()
+    return _groq_service_instance

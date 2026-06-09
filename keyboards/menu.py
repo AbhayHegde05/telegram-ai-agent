@@ -32,6 +32,7 @@ def get_language_keyboard():
         [InlineKeyboardButton("Telugu", callback_data="rec_lang_telugu")],
         [InlineKeyboardButton("Malayalam", callback_data="rec_lang_malayalam")],
         [InlineKeyboardButton("Any", callback_data="rec_lang_any")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -51,6 +52,7 @@ def get_genre_keyboard():
         [InlineKeyboardButton("Horror", callback_data="rec_genre_horror")],
         [InlineKeyboardButton("Adventure", callback_data="rec_genre_adventure")],
         [InlineKeyboardButton("Mystery", callback_data="rec_genre_mystery")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -64,6 +66,7 @@ def get_duration_keyboard():
         [InlineKeyboardButton("2-3 hours", callback_data="rec_duration_medium")],
         [InlineKeyboardButton("More than 3 hours", callback_data="rec_duration_long")],
         [InlineKeyboardButton("Any", callback_data="rec_duration_any")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -77,6 +80,7 @@ def get_release_preference_keyboard():
         [InlineKeyboardButton("Last 5 Years", callback_data="rec_release_5years")],
         [InlineKeyboardButton("Classic", callback_data="rec_release_classic")],
         [InlineKeyboardButton("Any", callback_data="rec_release_any")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -93,6 +97,7 @@ def get_mood_preference_keyboard():
         [InlineKeyboardButton("Dark", callback_data="rec_mood_dark")],
         [InlineKeyboardButton("Funny", callback_data="rec_mood_funny")],
         [InlineKeyboardButton("Any", callback_data="rec_mood_any")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
