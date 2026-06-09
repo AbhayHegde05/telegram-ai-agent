@@ -10,7 +10,7 @@ from groq import AsyncGroq
 logger = logging.getLogger(__name__)
 
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
-GROQ_BASE_URL = os.getenv('GROQ_BASE_URL', 'https://api.groq.com')
+GROQ_BASE_URL = os.getenv('GROQ_BASE_URL', '')
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
 
 # Module-level singleton instance
@@ -24,21 +24,13 @@ class GroqService:
         if not GROQ_API_KEY:
             raise ValueError("GROQ_API_KEY not found in environment variables")
         try:
-            self.client = AsyncGroq(
-                api_key=GROQ_API_KEY,
-                base_url=GROQ_BASE_URL
-            )
+            # Only pass base_url if explicitly set (library defaults work fine)
+            kwargs = {'api_key': GROQ_API_KEY}
+            if GROQ_BASE_URL:
+                kwargs['base_url'] = GROQ_BASE_URL
+            self.client = AsyncGroq(**kwargs)
             self.model = GROQ_MODEL
-            logger.info(f"✅ Groq client initialized successfully (Model: {self.model})")
-        except TypeError as e:
-            logger.warning(f"Retrying Groq initialization without base_url: {e}")
-            try:
-                self.client = AsyncGroq(api_key=GROQ_API_KEY)
-                self.model = GROQ_MODEL
-                logger.info(f"✅ Groq client initialized successfully (Model: {self.model})")
-            except Exception as retry_error:
-                logger.error(f"Failed to initialize Groq client: {retry_error}")
-                raise
+            logger.info(f"✅ Groq client initialized (Model: {self.model}, URL: {self.client.base_url})")
         except Exception as e:
             logger.error(f"Failed to initialize Groq client: {e}")
             raise
@@ -59,19 +51,23 @@ class GroqService:
 
         for attempt in range(max_retries):
             try:
+                logger.info(f"Groq API call attempt {attempt + 1}/{max_retries} (model={self.model})")
                 response = await self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     max_tokens=max_tokens,
                     temperature=0.7
                 )
+                logger.info(f"Groq API call successful")
                 return response.choices[0].message.content
             except Exception as e:
-                logger.error(f"Groq API error (attempt {attempt + 1}/{max_retries}): {e}")
+                logger.error(f"Groq API error (attempt {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)
+                    logger.info(f"Retrying in {delay}s...")
                     await asyncio.sleep(delay)
                 else:
+                    logger.error(f"All {max_retries} Groq API attempts failed")
                     return None
 
     async def get_movie_recommendations(self, preferences: dict, search_results: str) -> str:
