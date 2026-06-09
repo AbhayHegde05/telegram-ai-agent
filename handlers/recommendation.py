@@ -183,6 +183,8 @@ async def handle_mood_preference(update: Update, context: ContextTypes.DEFAULT_T
         query = update.callback_query
         await query.answer()
 
+        user_id = update.effective_user.id if update.effective_user else None
+
         # Extract mood from callback data
         mood_map = {
             "rec_mood_mindblowing": "Mind-Blowing",
