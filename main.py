@@ -163,9 +163,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     """
     error = context.error
 
+    # If we keep getting Telegram getUpdates Conflict, it means multiple instances are polling.
+    # Trigger a controlled crash so Render restarts the container cleanly.
     if isinstance(error, Conflict):
         logger.error(f"⚠️ Conflict error (multiple instances?): {error}")
-        return
+        raise error
 
     if isinstance(error, NetworkError):
         logger.warning(f"⚠️ Network error (transient): {error}")
@@ -197,9 +199,11 @@ def main():
         logger.info("🚀 Starting Telegram Movie Assistant Bot...")
 
         # Run the bot with retry on transient startup timeouts
-        # NOTE: run_polling() is blocking, so we must rebuild the Application per retry attempt.
+        # NOTE: run_polling() is blocking, so we rebuild the Application per attempt.
         max_retries = 5
         retry_delay_seconds = 3
+        max_consecutive_conflicts = 5
+        consecutive_conflicts = 0
 
         logger.info("🤖 Bot will start polling (with retries if startup times out)...")
 
@@ -236,6 +240,7 @@ def main():
                 application.run_polling()
                 break
             except TimedOut as e:
+                consecutive_conflicts = 0
                 if attempt >= max_retries:
                     raise
                 logger.warning(
@@ -244,11 +249,19 @@ def main():
                 )
                 import time
                 time.sleep(retry_delay_seconds)
+
             except Conflict as e:
-                # Another instance is already polling this token
-                logger.error(f"⚠️ Conflict: {e}")
-                logger.info("Another bot instance is running with this token.")
-                sys.exit(1)
+                consecutive_conflicts += 1
+                logger.error(f"⚠️ Conflict (getUpdates): {e} (consecutive={consecutive_conflicts}/{max_consecutive_conflicts})")
+
+                # Exit after several consecutive conflicts so the platform (Render) restarts cleanly.
+                if consecutive_conflicts >= max_consecutive_conflicts:
+                    logger.error("Too many consecutive Telegram polling conflicts. Exiting to allow clean restart.")
+                    sys.exit(1)
+
+                logger.info(f"Backoff before retrying polling: {retry_delay_seconds}s")
+                import time
+                time.sleep(retry_delay_seconds)
 
     except Conflict as e:
         logger.error(f"⚠️ Conflict: {e}")
