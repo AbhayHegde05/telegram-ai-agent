@@ -278,11 +278,17 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
         chunks = split_message(full_response)
         
         # Send recommendations chunks (Markdown so **bold** renders)
-        await query.message.reply_text(text=chunks[0], parse_mode="Markdown")
+        try:
+            await query.message.reply_text(text=chunks[0], parse_mode="Markdown")
+        except TelegramError:
+            await query.message.reply_text(text=chunks[0])
         
         # Send remaining chunks as new messages (Markdown so **bold** renders)
         for chunk in chunks[1:]:
-            await query.message.reply_text(chunk, parse_mode="Markdown")
+            try:
+                await query.message.reply_text(chunk, parse_mode="Markdown")
+            except TelegramError:
+                await query.message.reply_text(chunk)
 
         # Add option to start again
         await query.message.reply_text(

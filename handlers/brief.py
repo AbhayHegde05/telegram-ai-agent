@@ -99,11 +99,17 @@ async def handle_brief_movie_name(update: Update, context: ContextTypes.DEFAULT_
         chunks = split_message(full_response)
         
         # Edit the processing message with first chunk (Markdown so **bold** renders)
-        await processing_message.edit_text(text=chunks[0], parse_mode="Markdown")
+        try:
+            await processing_message.edit_text(text=chunks[0], parse_mode="Markdown")
+        except TelegramError:
+            await processing_message.edit_text(text=chunks[0])
         
         # Send remaining chunks as new messages (Markdown so **bold** renders)
         for chunk in chunks[1:]:
-            await update.message.reply_text(chunk, parse_mode="Markdown")
+            try:
+                await update.message.reply_text(chunk, parse_mode="Markdown")
+            except TelegramError:
+                await update.message.reply_text(chunk)
 
         # Add menu options
         await update.message.reply_text(
