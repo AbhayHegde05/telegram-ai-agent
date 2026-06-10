@@ -6,6 +6,8 @@ Handles /start command and routes to appropriate handlers
 import logging
 import sys
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
 
 # Load environment variables FIRST, before importing anything that reads env vars
@@ -41,6 +43,24 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+    
+    def log_message(self, format, *args):
+        pass
+
+def run_dummy_server(port):
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        logger.info(f"Dummy HTTP server started on port {port} for health checks.")
+        server.serve_forever()
+    except Exception as e:
+        logger.error(f"Failed to start dummy server: {e}")
 
 # Get bot token
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -150,6 +170,23 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+async def endchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    End chat flow and clear user state.
+    """
+    user_id = update.effective_user.id if update.effective_user else None
+
+    clear_feature_state(context)
+
+    # Save cleared state
+    if user_id:
+        save_user_data(user_id, {}, None)
+
+    await update.message.reply_text(
+        "👋 Thank you for visiting Movie Assistant! See you again soon—send /start to begin anytime."
+    )
+
+
 async def handle_brief_or_review_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Route text input to brief or review handlers based on current state
@@ -227,6 +264,16 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 def main():
     """Start the bot"""
+    # Start dummy HTTP server if PORT is set (for platforms like Render Web Services)
+    port = os.environ.get("PORT")
+    if port:
+        try:
+            port = int(port)
+            server_thread = threading.Thread(target=run_dummy_server, args=(port,), daemon=True)
+            server_thread.start()
+        except ValueError:
+            pass
+
     # Ensure we release lock on exit
     try:
         _acquire_lock()
@@ -252,6 +299,7 @@ def main():
                 # Command handlers
                 application.add_handler(CommandHandler("start", start))
                 application.add_handler(CommandHandler("help", handle_help))
+                application.add_handler(CommandHandler("endchat", endchat))
 
                 # Cancel handler
                 application.add_handler(CallbackQueryHandler(handle_cancel, pattern="^cancel$"))

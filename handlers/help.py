@@ -32,6 +32,11 @@ Need a detailed breakdown before watching?
 • Enter a movie name
 • Get a comprehensive review with ratings
 
+🛑 **End Chat**
+Finish your session and clear the current flow.
+• Send `/endchat`
+• (Also clears any in-progress feature state)
+
 ❌ **Cancel**
 Want to stop what you're doing?
 • Click the "Cancel" button on any screen
