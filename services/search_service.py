@@ -38,13 +38,13 @@ class SearchService:
         """
         try:
             # Using DuckDuckGo HTML search with more robust headers
-            url = "https://html.duckduckgo.com/"
+            url = "https://html.duckduckgo.com/html/"
             params = {
                 'q': query,
                 'kl': 'us-en'
             }
             
-            response = requests.get(url, params=params, headers=self.headers, timeout=self.timeout)
+            response = requests.post(url, data=params, headers=self.headers, timeout=self.timeout)
             response.raise_for_status()
             
             # Parse results from DuckDuckGo HTML
@@ -65,6 +65,7 @@ class SearchService:
         """
         try:
             from html.parser import HTMLParser
+            import html as html_lib
             
             results = []
             
@@ -72,15 +73,20 @@ class SearchService:
             import re
             
             # Extract result divs
-            result_pattern = r'<div class="result[^"]*">.*?<a[^>]*href="([^"]*)"[^>]*>([^<]*)</a>.*?<a class="result__snippet"[^>]*>([^<]*)</a>'
-            matches = re.findall(result_pattern, html_content, re.DOTALL)
+            result_pattern = r'<div class=\"result[^>]*>.*?<a class=\"result__url\" href=\"([^\"]+)\".*?<h2 class=\"result__title\">.*?<a[^>]*>(.*?)</a>.*?<a class=\"result__snippet[^>]*>(.*?)</a>'
+            matches = re.findall(result_pattern, html_content, re.DOTALL | re.IGNORECASE)
             
             for url, title, snippet in matches[:num_results]:
-                results.append({
-                    'title': title.strip(),
-                    'snippet': snippet.strip(),
-                    'url': url
-                })
+                # Clean up HTML tags and unescape HTML entities
+                clean_title = html_lib.unescape(re.sub(r'<[^>]+>', '', title)).strip()
+                clean_snippet = html_lib.unescape(re.sub(r'<[^>]+>', '', snippet)).strip()
+
+                if clean_title and clean_snippet:
+                    results.append({
+                        'title': clean_title,
+                        'snippet': clean_snippet,
+                        'url': url
+                    })
             
             return results
         except Exception as e:
