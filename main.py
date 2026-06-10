@@ -6,6 +6,8 @@ Handles /start command and routes to appropriate handlers
 import logging
 import sys
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
@@ -87,8 +89,30 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.error(f"❌ Error: {type(error).__name__}: {error}")
 
 
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+
+    def log_message(self, format, *args):
+        pass  # Suppress HTTP logging
+
+def start_health_check_server():
+    """Starts a dummy HTTP server to satisfy Render web service health checks"""
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    logger.info(f"🌐 Starting health check server on port {port}")
+    server_thread = threading.Thread(target=server.serve_forever)
+    server_thread.daemon = True
+    server_thread.start()
+
 def main():
     """Start the bot"""
+    # Start the dummy web server for Render
+    start_health_check_server()
+
     try:
         logger.info("🚀 Starting Telegram Movie Assistant Bot...")
         
