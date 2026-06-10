@@ -11,6 +11,27 @@ logger = logging.getLogger(__name__)
 
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 GROQ_BASE_URL = os.getenv('GROQ_BASE_URL', '')
+
+def _normalize_groq_base_url(url: str) -> str:
+    """
+    Prevent double-prefix issues by ensuring GROQ_BASE_URL does NOT include
+    '/openai' or '/openai/v1' path segments.
+
+    Examples:
+      - https://api.groq.com -> OK
+      - https://api.groq.com/openai/v1 -> normalized to https://api.groq.com
+      - https://api.groq.com/openai -> normalized to https://api.groq.com
+    """
+    if not url:
+        return ""
+
+    url = url.strip().rstrip("/")
+    # Strip known suffixes that the groq client will append to internally
+    for suffix in ("/openai/v1", "/openai"):
+        if url.lower().endswith(suffix):
+            url = url[: -len(suffix)]
+            url = url.rstrip("/")
+    return url
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
 
 # Module-level singleton instance
@@ -26,11 +47,15 @@ class GroqService:
         try:
             # Only pass base_url if explicitly set (library defaults work fine)
             kwargs = {'api_key': GROQ_API_KEY}
-            if GROQ_BASE_URL:
-                kwargs['base_url'] = GROQ_BASE_URL
+            normalized_base_url = _normalize_groq_base_url(GROQ_BASE_URL) if GROQ_BASE_URL else ""
+            if normalized_base_url:
+                kwargs['base_url'] = normalized_base_url
+
             self.client = AsyncGroq(**kwargs)
             self.model = GROQ_MODEL
-            logger.info(f"✅ Groq client initialized (Model: {self.model}, URL: {self.client.base_url})")
+            logger.info(
+                f"✅ Groq client initialized (Model: {self.model}, URL: {getattr(self.client, 'base_url', 'n/a')}, normalized_base_url={normalized_base_url or 'default'})"
+            )
         except Exception as e:
             logger.error(f"Failed to initialize Groq client: {e}")
             raise
