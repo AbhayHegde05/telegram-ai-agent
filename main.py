@@ -6,6 +6,7 @@ Handles /start command and routes to appropriate handlers
 import logging
 import sys
 import os
+import time
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
