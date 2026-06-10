@@ -99,12 +99,12 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
         # Split and send in chunks
         chunks = split_message(full_response)
         
-        # Edit the processing message with first chunk
-        await processing_message.edit_text(text=chunks[0])
+        # Edit the processing message with first chunk (Markdown so **bold** renders)
+        await processing_message.edit_text(text=chunks[0], parse_mode="Markdown")
         
-        # Send remaining chunks as new messages
+        # Send remaining chunks as new messages (Markdown so **bold** renders)
         for chunk in chunks[1:]:
-            await update.message.reply_text(chunk)
+            await update.message.reply_text(chunk, parse_mode="Markdown")
 
         # Add menu options
         await update.message.reply_text(
