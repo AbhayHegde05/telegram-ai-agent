@@ -52,19 +52,54 @@ logger.info("✅ Bot token loaded successfully")
 
 # Local lock to reduce accidental duplicate polling starts (best-effort on a single host)
 LOCK_FILE = os.path.join(os.path.dirname(__file__), ".bot_lock")
+LOCK_STALE_SECONDS = 300  # treat locks older than 5 minutes as stale
+
+def _is_pid_running(pid: int) -> bool:
+    """
+    Best-effort PID liveness check on Windows.
+    """
+    try:
+        # Signal 0 works on *nix; on Windows we fall back to tasklist
+        import subprocess
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}"],
+            capture_output=True,
+            text=True,
+            check=False
+        ).stdout
+        return str(pid) in out
+    except Exception:
+        # If we can't verify, assume not running (safer for recovery)
+        return False
 
 def _acquire_lock() -> None:
     """
     Create a PID lock file so only one instance runs on the same machine.
+    Stale locks are automatically overwritten to avoid startup deadlocks after crashes.
     """
     try:
         if os.path.exists(LOCK_FILE):
-            with open(LOCK_FILE, "r", encoding="utf-8") as f:
-                existing_pid = (f.read() or "").strip()
-            if existing_pid:
-                logger.warning(f"⚠️ Existing bot lock found (pid={existing_pid}). Attempting to stop duplicate start.")
-            # If file exists, treat it as "another instance may be running"
-            raise RuntimeError(f"Bot lock exists at {LOCK_FILE}")
+            existing_pid = None
+            try:
+                with open(LOCK_FILE, "r", encoding="utf-8") as f:
+                    existing_pid = (f.read() or "").strip()
+            except Exception:
+                existing_pid = None
+
+            lock_age = time.time() - os.path.getmtime(LOCK_FILE)
+
+            # If lock is stale, overwrite it.
+            if lock_age > LOCK_STALE_SECONDS:
+                logger.warning(f"⚠️ Stale bot lock detected (age={int(lock_age)}s). Overwriting {LOCK_FILE}.")
+            else:
+                # If lock is fresh and PID appears running, block.
+                if existing_pid and existing_pid.isdigit():
+                    pid_int = int(existing_pid)
+                    if _is_pid_running(pid_int):
+                        raise RuntimeError(f"Bot lock exists (pid={existing_pid}) at {LOCK_FILE}")
+                # If PID isn't running, treat as stale and overwrite.
+                logger.warning(f"⚠️ Bot lock exists but pid is not running. Overwriting {LOCK_FILE}.")
+
         with open(LOCK_FILE, "w", encoding="utf-8") as f:
             f.write(str(os.getpid()))
     except Exception as e:

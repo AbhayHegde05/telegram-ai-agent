@@ -47,8 +47,8 @@ async def start_recommendation(update: Update, context: ContextTypes.DEFAULT_TYP
         init_user_data(context)
         set_current_feature(context, 'recommendation')
 
-        # Start with language question
-        await query.edit_message_text(
+        # Start with language question (use a new message so steps don't "merge")
+        await query.message.reply_text(
             text="🎯 Movie Recommendation\n\n"
                  "Step 1 of 5\n\n"
                  "Which language do you prefer?",
@@ -73,8 +73,8 @@ async def handle_language_selection(update: Update, context: ContextTypes.DEFAUL
         preferences = get_preferences(context)
         preferences.language = language
 
-        # Move to genre question
-        await query.edit_message_text(
+        # Move to genre question (new message)
+        await query.message.reply_text(
             text="✅ Language selected: " + language + "\n\n"
                  "Step 2 of 5\n\n"
                  "Which genre are you interested in?",
@@ -99,8 +99,8 @@ async def handle_genre_selection(update: Update, context: ContextTypes.DEFAULT_T
         preferences = get_preferences(context)
         preferences.genre = genre
 
-        # Move to duration question
-        await query.edit_message_text(
+        # Move to duration question (new message)
+        await query.message.reply_text(
             text="✅ Genre selected: " + genre + "\n\n"
                  "Step 3 of 5\n\n"
                  "Preferred duration?",
@@ -131,8 +131,8 @@ async def handle_duration_selection(update: Update, context: ContextTypes.DEFAUL
         preferences = get_preferences(context)
         preferences.duration = duration
 
-        # Move to release preference question
-        await query.edit_message_text(
+        # Move to release preference question (new message)
+        await query.message.reply_text(
             text="✅ Duration selected: " + duration + "\n\n"
                  "Step 4 of 5\n\n"
                  "Release preference?",
@@ -163,8 +163,8 @@ async def handle_release_preference(update: Update, context: ContextTypes.DEFAUL
         preferences = get_preferences(context)
         preferences.release = release
 
-        # Move to mood preference question
-        await query.edit_message_text(
+        # Move to mood preference question (new message)
+        await query.message.reply_text(
             text="✅ Release preference selected: " + release + "\n\n"
                  "Step 5 of 5\n\n"
                  "Mood preference?",
@@ -206,8 +206,8 @@ async def handle_mood_preference(update: Update, context: ContextTypes.DEFAULT_T
             save_user_data(user_id, preferences.to_dict(), None)
             add_history(user_id, 'recommendation', str(preferences), 'recommendations_generated')
 
-        # Show processing message
-        await query.edit_message_text(
+        # Show processing message (new message)
+        await query.message.reply_text(
             text="✅ Mood preference selected: " + mood + "\n\n"
                  "🔍 Searching movies...\n"
                  "⏳ Analyzing options...\n"
@@ -277,12 +277,12 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
         # Split and send in chunks if needed
         chunks = split_message(full_response)
         
-        # Edit the processing message with first chunk
-        await query.edit_message_text(text=chunks[0])
+        # Send recommendations chunks (Markdown so **bold** renders)
+        await query.message.reply_text(text=chunks[0], parse_mode="Markdown")
         
-        # Send remaining chunks as new messages
+        # Send remaining chunks as new messages (Markdown so **bold** renders)
         for chunk in chunks[1:]:
-            await query.message.reply_text(chunk)
+            await query.message.reply_text(chunk, parse_mode="Markdown")
 
         # Add option to start again
         await query.message.reply_text(
@@ -293,9 +293,9 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
     except Exception as e:
         logger.error(f"Unexpected error in generate_recommendations: {e}")
         try:
-            await query.edit_message_text(
+            await query.message.reply_text(
                 text="❌ Sorry, an unexpected error occurred.\n\n"
-                     "Please try again."
+                     "Please try again.",
             )
             await query.message.reply_text(
                 "Choose an option:",
