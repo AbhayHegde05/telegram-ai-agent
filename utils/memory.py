@@ -1,182 +1,125 @@
 """
-Persistent user memory using SQLite.
-Stores user preferences and recent interactions so they survive bot restarts.
+Persistent user memory using Supabase.
+Stores user preferences and recent interactions so they survive serverless webhook instances.
 """
 
-import sqlite3
-import json
 import logging
 import os
 import time
 from typing import Optional
 
+from supabase import create_client, Client
+
 logger = logging.getLogger(__name__)
 
-# Database path
-DB_PATH = os.getenv('BOT_MEMORY_DB', 'bot_memory.db')
+# Initialize Supabase Client
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-
-def _get_connection() -> sqlite3.Connection:
-    """Get a database connection with WAL mode for better concurrency."""
-    conn = sqlite3.connect(DB_PATH, timeout=5)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.row_factory = sqlite3.Row
-    return conn
-
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+else:
+    supabase = None
+    logger.warning("SUPABASE_URL or SUPABASE_KEY not set. Memory will not be persisted.")
 
 def init_db() -> None:
-    """Create tables if they don't exist."""
-    try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_data (
-                user_id INTEGER PRIMARY KEY,
-                preferences TEXT DEFAULT '{}',
-                current_feature TEXT DEFAULT NULL,
-                last_interaction REAL DEFAULT 0
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                feature TEXT NOT NULL,
-                input_data TEXT DEFAULT '',
-                output_summary TEXT DEFAULT '',
-                timestamp REAL DEFAULT 0,
-                FOREIGN KEY (user_id) REFERENCES user_data(user_id)
-            )
-        """)
-
-        # Clean up old history entries (older than 7 days)
-        cursor.execute(
-            "DELETE FROM user_history WHERE timestamp < ?",
-            (time.time() - 7 * 24 * 3600,)
-        )
-        # Also cap at 50 entries per user
-        cursor.execute("""
-            DELETE FROM user_history WHERE id NOT IN (
-                SELECT id FROM user_history
-                ORDER BY timestamp DESC
-                LIMIT 500
-            )
-        """)
-
-        conn.commit()
-        conn.close()
-        logger.info("✅ SQLite memory database initialized")
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize memory database: {e}")
-
+    """Supabase is managed via remote migrations. Local initialization is skipped."""
+    if not supabase:
+        logger.warning("Database client not initialized. Ensure Supabase credentials are provided.")
+    else:
+        logger.info("✅ Supabase client initialized")
 
 def load_user_data(user_id: int) -> dict:
-    """Load user data from SQLite."""
+    """Load user data from Supabase."""
+    if not supabase:
+        return {}
+
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute(
-            "SELECT preferences, current_feature FROM user_data WHERE user_id = ?",
-            (user_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
-
-        if row:
-            preferences = json.loads(row[0]) if row[0] else {}
+        response = supabase.table("user_data").select("*").eq("user_id", user_id).execute()
+        if response.data and len(response.data) > 0:
+            row = response.data[0]
             return {
-                'preferences': preferences,
-                'current_feature': row[1]
+                'preferences': row.get('preferences', {}),
+                'current_feature': row.get('current_feature')
             }
         return {}
     except Exception as e:
         logger.error(f"Error loading user data for {user_id}: {e}")
         return {}
 
-
 def save_user_data(user_id: int, preferences: dict, current_feature: Optional[str] = None) -> None:
-    """Save user data to SQLite."""
+    """Save user data to Supabase."""
+    if not supabase:
+        return
+
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            INSERT INTO user_data (user_id, preferences, current_feature, last_interaction)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                preferences = excluded.preferences,
-                current_feature = excluded.current_feature,
-                last_interaction = excluded.last_interaction
-        """, (user_id, json.dumps(preferences), current_feature, time.time()))
-
-        conn.commit()
-        conn.close()
+        data = {
+            "user_id": user_id,
+            "preferences": preferences,
+            "current_feature": current_feature,
+            "last_interaction": time.time()
+        }
+        supabase.table("user_data").upsert(data).execute()
     except Exception as e:
         logger.error(f"Error saving user data for {user_id}: {e}")
 
-
 def add_history(user_id: int, feature: str, input_data: str = "", output_summary: str = "") -> None:
     """Add an entry to user history."""
+    if not supabase:
+        return
+
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
+        # First ensure the user_data row exists to satisfy the foreign key constraint
+        # Even if they just started, they need a row.
+        supabase.table("user_data").upsert({
+            "user_id": user_id,
+            "last_interaction": time.time()
+        }, on_conflict="user_id").execute()
 
-        cursor.execute("""
-            INSERT INTO user_history (user_id, feature, input_data, output_summary, timestamp)
-            VALUES (?, ?, ?, ?, ?)
-        """, (user_id, feature, input_data, output_summary[:500], time.time()))
-
-        conn.commit()
-        conn.close()
+        data = {
+            "user_id": user_id,
+            "feature": feature,
+            "input_data": input_data,
+            "output_summary": output_summary[:500] if output_summary else "",
+            "timestamp": time.time()
+        }
+        supabase.table("user_history").insert(data).execute()
     except Exception as e:
         logger.error(f"Error adding history for {user_id}: {e}")
 
-
 def get_recent_history(user_id: int, limit: int = 5) -> list:
     """Get recent interaction history for a user."""
+    if not supabase:
+        return []
+
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT feature, input_data, output_summary, timestamp
-            FROM user_history
-            WHERE user_id = ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-        """, (user_id, limit))
-
-        rows = cursor.fetchall()
-        conn.close()
-
+        response = supabase.table("user_history")\
+            .select("feature, input_data, output_summary, timestamp")\
+            .eq("user_id", user_id)\
+            .order("timestamp", desc=True)\
+            .limit(limit)\
+            .execute()
+        
         return [
             {
-                'feature': row[0],
-                'input': row[1],
-                'summary': row[2],
-                'timestamp': row[3]
+                'feature': row['feature'],
+                'input': row['input_data'],
+                'summary': row['output_summary'],
+                'timestamp': row['timestamp']
             }
-            for row in rows
+            for row in response.data
         ]
     except Exception as e:
         logger.error(f"Error getting history for {user_id}: {e}")
         return []
 
-
 def clear_user_data(user_id: int) -> None:
     """Clear all data for a user."""
+    if not supabase:
+        return
+
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("DELETE FROM user_data WHERE user_id = ?", (user_id,))
-        cursor.execute("DELETE FROM user_history WHERE user_id = ?", (user_id,))
-
-        conn.commit()
-        conn.close()
+        # Due to ON DELETE CASCADE on user_history, deleting user_data removes history too
+        supabase.table("user_data").delete().eq("user_id", user_id).execute()
     except Exception as e:
         logger.error(f"Error clearing data for {user_id}: {e}")
