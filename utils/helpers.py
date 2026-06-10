@@ -83,7 +83,7 @@ def is_valid_movie_name(name: str) -> bool:
     Returns:
         True if valid
     """
-    return bool(name) and len(name) >= 2
+    return bool(name) and len(name) >= 1
 
 
 # --- Message Splitting ---

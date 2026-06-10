@@ -47,7 +47,7 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
 
         if not is_valid_movie_name(movie_name):
             await update.message.reply_text(
-                "❌ Please enter a valid movie name (at least 2 characters).\n\n"
+                "❌ Please enter a valid movie name.\n\n"
                 "Example: The Dark Knight"
             )
             return
