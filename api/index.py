@@ -51,6 +51,7 @@ if not TELEGRAM_BOT_TOKEN:
 
 # Build PTB Application with updater=None (webhook mode)
 ptb_app = Application.builder().token(TELEGRAM_BOT_TOKEN).updater(None).build()
+
 ptb_app.bot_data["audit_endpoint"] = "/api/webhook"
 
 ptb_app.add_error_handler(error_handler)

@@ -1,10 +1,12 @@
 """Session-oriented persistence using Supabase."""
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional
 
+import httpx
 from supabase import Client, create_client
 
 logger = logging.getLogger(__name__)
@@ -21,18 +23,58 @@ SUPABASE_KEY = (
     or os.getenv("SUPABASE_ANON_KEY")
 )
 
-if SUPABASE_URL and SUPABASE_KEY:
-    supabase: Optional[Client] = create_client(SUPABASE_URL, SUPABASE_KEY)
-else:
-    supabase = None
-    logger.warning(
-        "Supabase credentials are not set. Session data will not be persisted."
+
+def _create_supabase_client() -> Optional[Client]:
+    if not (SUPABASE_URL and SUPABASE_KEY):
+        return None
+
+    # Vercel serverless + HTTP/2 connections can be reset (StreamReset).
+    # Force HTTP/1.1 for the underlying httpx transport.
+    httpx_client = httpx.Client(http2=False)
+
+    # supabase-py v2 uses httpx under the hood via this option.
+    # If the option is not supported, it will raise; we catch at call sites.
+    return create_client(
+        SUPABASE_URL,
+        SUPABASE_KEY,
+        options={"http_client": httpx_client},
     )
+
+
+# Create client lazily per invocation to avoid reusing defunct connections.
+_supabase_singleton: Optional[Client] = None
+_supabase_singleton_ready = False
+
+
+def _get_supabase() -> Optional[Client]:
+    global _supabase_singleton, _supabase_singleton_ready
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+
+    # In most serverless environments, module-level objects are reused across warm invocations,
+    # which can make HTTP/2 resets more likely. We still keep a singleton, but recreate it
+    # on-demand if it fails.
+    if _supabase_singleton_ready and _supabase_singleton is not None:
+        return _supabase_singleton
+
+    try:
+        _supabase_singleton = _create_supabase_client()
+        _supabase_singleton_ready = True
+        return _supabase_singleton
+    except Exception:
+        logger.exception("❌ Failed to create Supabase client")
+        _supabase_singleton = None
+        _supabase_singleton_ready = False
+        return None
+
+
+async def _to_thread(fn, *args, **kwargs):
+    return await asyncio.to_thread(fn, *args, **kwargs)
 
 
 def init_db() -> None:
     """Report whether the remote Supabase client is available."""
-    if supabase:
+    if _get_supabase():
         logger.info("Supabase session storage initialized")
     else:
         logger.warning("Supabase session storage is unavailable")
@@ -40,23 +82,25 @@ def init_db() -> None:
 
 def get_storage_status() -> dict:
     """Check that both session tables are reachable."""
-    if not supabase:
+    supa = _get_supabase()
+    if not supa:
         return {"ok": False, "error": "Supabase client is not configured"}
 
     try:
-        supabase.table("bot_sessions").select("id").limit(1).execute()
-        supabase.table("session_events").select("id").limit(1).execute()
+        supa.table("bot_sessions").select("id").limit(1).execute()
+        supa.table("session_events").select("id").limit(1).execute()
         return {"ok": True}
     except Exception as exc:
         return {"ok": False, "error": str(exc)[:500]}
 
 
-def _active_session(user_id: int) -> Optional[dict]:
-    if not supabase:
+def _active_session_sync(user_id: int) -> Optional[dict]:
+    supa = _get_supabase()
+    if not supa:
         return None
 
     response = (
-        supabase.table("bot_sessions")
+        supa.table("bot_sessions")
         .select("*")
         .eq("user_id", user_id)
         .eq("status", "active")
@@ -77,11 +121,12 @@ def start_session(
     force_new: bool = False,
 ) -> Optional[str]:
     """Open or reuse the user's active session and return its UUID."""
-    if not supabase:
+    supa = _get_supabase()
+    if not supa:
         return None
 
     try:
-        active = _active_session(user_id)
+        active = _active_session_sync(user_id)
         if active and force_new:
             log_event(
                 user_id,
@@ -90,7 +135,7 @@ def start_session(
                 handler="start",
                 session_id=active["id"],
             )
-            supabase.table("bot_sessions").update(
+            supa.table("bot_sessions").update(
                 {
                     "status": "ended",
                     "last_activity_at": _now(),
@@ -110,35 +155,29 @@ def start_session(
 
         if active:
             if identity:
-                supabase.table("bot_sessions").update(identity).eq(
-                    "id", active["id"]
-                ).execute()
+                supa.table("bot_sessions").update(identity).eq("id", active["id"]).execute()
             return active["id"]
 
         data = {"user_id": user_id, **identity}
-        response = supabase.table("bot_sessions").insert(data).execute()
+        response = supa.table("bot_sessions").insert(data).execute()
         if response.data:
             return response.data[0]["id"]
-        created = _active_session(user_id)
+
+        created = _active_session_sync(user_id)
         return created["id"] if created else None
     except Exception as exc:
-        try:
-            active = _active_session(user_id)
-            if active:
-                return active["id"]
-        except Exception:
-            pass
         logger.error("Error starting session for %s: %s", user_id, exc)
         return None
 
 
 def end_session(user_id: int) -> None:
     """Close the user's active session."""
-    if not supabase:
+    supa = _get_supabase()
+    if not supa:
         return
 
     try:
-        active = _active_session(user_id)
+        active = _active_session_sync(user_id)
         if active:
             log_event(
                 user_id,
@@ -147,7 +186,7 @@ def end_session(user_id: int) -> None:
                 handler="endchat",
                 session_id=active["id"],
             )
-            supabase.table("bot_sessions").update(
+            supa.table("bot_sessions").update(
                 {
                     "status": "ended",
                     "current_feature": None,
@@ -161,11 +200,12 @@ def end_session(user_id: int) -> None:
 
 def load_user_data(user_id: int) -> dict:
     """Load state from the user's active session."""
-    if not supabase:
+    supa = _get_supabase()
+    if not supa:
         return {}
 
     try:
-        session = _active_session(user_id)
+        session = _active_session_sync(user_id)
         if not session:
             return {}
         return {
@@ -184,13 +224,14 @@ def save_user_data(
     current_feature: Optional[str] = None,
 ) -> None:
     """Persist feature state in the user's active session."""
-    if not supabase:
+    supa = _get_supabase()
+    if not supa:
         return
 
     try:
         session_id = start_session(user_id)
         if session_id:
-            supabase.table("bot_sessions").update(
+            supa.table("bot_sessions").update(
                 {
                     "preferences": preferences or {},
                     "current_feature": current_feature,
@@ -212,7 +253,8 @@ def log_event(
     session_id: Optional[str] = None,
 ) -> None:
     """Append an event to the user's active session."""
-    if not supabase:
+    supa = _get_supabase()
+    if not supa:
         return
 
     try:
@@ -220,7 +262,7 @@ def log_event(
         if not session_id:
             return
 
-        supabase.table("session_events").insert(
+        supa.table("session_events").insert(
             {
                 "session_id": session_id,
                 "user_id": user_id,
@@ -256,15 +298,17 @@ def add_history(
 
 def get_recent_history(user_id: int, limit: int = 5) -> list:
     """Return recent feature-history events for the active session."""
-    if not supabase:
+    supa = _get_supabase()
+    if not supa:
         return []
 
     try:
-        session = _active_session(user_id)
+        session = _active_session_sync(user_id)
         if not session:
             return []
+
         response = (
-            supabase.table("session_events")
+            supa.table("session_events")
             .select("payload, created_at")
             .eq("session_id", session["id"])
             .eq("event_type", "feature_history")
@@ -272,6 +316,7 @@ def get_recent_history(user_id: int, limit: int = 5) -> list:
             .limit(limit)
             .execute()
         )
+
         return [
             {
                 "feature": row["payload"].get("feature"),
@@ -289,3 +334,4 @@ def get_recent_history(user_id: int, limit: int = 5) -> list:
 def clear_user_data(user_id: int) -> None:
     """Compatibility alias for closing the active session."""
     end_session(user_id)
+
