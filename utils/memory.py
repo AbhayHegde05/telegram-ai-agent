@@ -15,12 +15,15 @@ logger = logging.getLogger(__name__)
 # Initialize Supabase Client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# Backward/alternate env var name (from docs)
+if not SUPABASE_KEY:
+    SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 
 if SUPABASE_URL and SUPABASE_KEY:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
     supabase = None
-    logger.warning("SUPABASE_URL or SUPABASE_KEY not set. Memory will not be persisted.")
+logger.warning("SUPABASE_URL or SUPABASE_KEY/SUPABASE_ANON_KEY not set. Memory will not be persisted.")
 
 def init_db() -> None:
     """Supabase is managed via remote migrations. Local initialization is skipped."""
