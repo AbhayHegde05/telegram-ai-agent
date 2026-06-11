@@ -76,8 +76,12 @@ ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_brief
 app = FastAPI(title="Telegram Movie Bot Webhook")
 
 
+_is_initialized = False
+
+
 @app.on_event("startup")
 async def _startup():
+
     """Initialize PTB application once on cold start."""
     global ptb_app
     logger.info("PTB startup: initializing application")
@@ -89,11 +93,13 @@ async def _startup():
         logger.warning("PTB startup: start() unsupported/failed (continuing): %s", repr(e))
 
 
+
 @app.post("/api/webhook")
 async def telegram_webhook(request: Request):
-
+    global _is_initialized
 
     logger.info("WEBHOOK HIT")
+
     logger.info(
         "📨 Webhook request received: method=%s path=%s headers=%s",
         request.method,
