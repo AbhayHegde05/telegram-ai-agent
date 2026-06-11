@@ -29,11 +29,11 @@ from handlers.recommendation import (
 )
 from handlers.brief import start_brief, handle_brief_movie_name
 from handlers.review import start_review, handle_review_movie_name
-from handlers.help import handle_help
+from handlers.help import handle_help as send_help
 from keyboards.menu import start_menu, get_start_menu_keyboard
 from utils.helpers import rate_limiter
 from utils.states import clear_feature_state, RecommendationPreferences
-from utils.memory import init_db, load_user_data, save_user_data, add_history
+from utils.memory import init_db, load_user_data, save_user_data, add_history, log_event
 
 # Initialize SQLite memory database
 init_db()
@@ -141,19 +141,64 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     Start command - Display main menu
     """
     user_id = update.effective_user.id if update.effective_user else None
+
+    try:
+        if user_id:
+            log_event(
+                user_id,
+                "handler_start",
+                {"command": "start"},
+                endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
+                update_kind="message",
+                handler="start"
+            )
+    except Exception:
+        pass
+
     if user_id:
         saved = load_user_data(user_id)
         if saved:
             context.user_data.update(saved)
             if 'preferences' in saved and isinstance(saved['preferences'], dict):
                 context.user_data['preferences'] = RecommendationPreferences.from_dict(saved['preferences'])
+
     await start_menu(update, context)
+
+
+async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log and display the help guide."""
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id:
+        log_event(
+            user_id,
+            "handler_start",
+            {"command": "help"},
+            endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
+            update_kind="message",
+            handler="help"
+        )
+
+    await send_help(update, context)
 
 
 async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Cancel current flow and return to main menu
     """
+    try:
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id:
+            log_event(
+                user_id,
+                "handler_start",
+                {"callback": "cancel"},
+                endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
+                handler="handle_cancel",
+                update_kind="callback_query"
+            )
+    except Exception:
+        pass
+
     query = update.callback_query
     await query.answer()
 
@@ -177,6 +222,19 @@ async def endchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     user_id = update.effective_user.id if update.effective_user else None
 
+    try:
+        if user_id:
+            log_event(
+                user_id,
+                "handler_start",
+                {"command": "endchat"},
+                endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
+                update_kind="message",
+                handler="endchat"
+            )
+    except Exception:
+        pass
+
     clear_feature_state(context)
 
     # Save cleared state
@@ -194,6 +252,20 @@ async def handle_brief_or_review_input(update: Update, context: ContextTypes.DEF
     """
     # Rate limiting check
     user_id = update.effective_user.id if update.effective_user else None
+    if user_id:
+        try:
+            if update.message and update.message.text:
+                log_event(
+                    user_id,
+                    "handler_start",
+                    {"feature_router_text": update.message.text[:200]},
+                    endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
+                    handler="handle_brief_or_review_input",
+                    update_kind="message"
+                )
+        except Exception:
+            pass
+
     if user_id and not rate_limiter.is_allowed(user_id):
         await update.message.reply_text(
             "⏳ You're sending too many requests. Please wait a moment and try again."
@@ -293,6 +365,7 @@ def main():
         for attempt in range(1, max_retries + 1):
             try:
                 application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+                application.bot_data["audit_endpoint"] = "bot.polling"
 
                 # Error handler
                 application.add_error_handler(error_handler)

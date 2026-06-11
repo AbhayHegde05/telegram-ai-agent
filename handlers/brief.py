@@ -10,6 +10,7 @@ from telegram.error import TelegramError
 
 from keyboards.menu import get_start_menu_keyboard
 from utils.states import init_user_data, set_current_feature
+from utils.memory import log_event
 from utils.helpers import split_message, sanitize_movie_name, is_valid_movie_name
 from services.groq_service import get_groq_service
 from services.search_service import SearchService
@@ -42,8 +43,24 @@ async def handle_brief_movie_name(update: Update, context: ContextTypes.DEFAULT_
     """
     Handle movie name input and generate brief
     """
+    user_id = update.effective_user.id if update.effective_user else None
+    movie_name_for_log = None
     try:
         movie_name = sanitize_movie_name(update.message.text)
+        movie_name_for_log = movie_name if movie_name else None
+
+        if user_id:
+            try:
+                log_event(
+                    user_id,
+                    "brief_input",
+                    {"movie_name": (movie_name_for_log or "")[:200]},
+                    endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
+                    update_kind="message",
+                    handler="handle_brief_movie_name"
+                )
+            except Exception:
+                pass
 
         if not is_valid_movie_name(movie_name):
             await update.message.reply_text(
@@ -80,12 +97,25 @@ async def handle_brief_movie_name(update: Update, context: ContextTypes.DEFAULT_
         # Generate brief
         try:
             brief = await groq_service.get_movie_brief(movie_name, search_results)
-            
+
             if brief is None:
                 raise Exception("Groq returned None")
         except Exception as e:
             logger.error(f"Error generating brief: {e}")
             brief = f"Sorry, I couldn't find reliable information for '{movie_name}'."
+
+        if user_id:
+            try:
+                log_event(
+                    user_id,
+                    "brief_output",
+                    {"movie_name": (movie_name_for_log or "")[:200], "brief": (brief or "")[:1500]},
+                    endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
+                    update_kind="message",
+                    handler="handle_brief_movie_name"
+                )
+            except Exception:
+                pass
 
         # Build the full response
         full_response = (

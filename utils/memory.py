@@ -14,16 +14,20 @@ logger = logging.getLogger(__name__)
 
 # Initialize Supabase Client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-# Backward/alternate env var name (from docs)
-if not SUPABASE_KEY:
-    SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    or os.getenv("SUPABASE_KEY")
+    or os.getenv("SUPABASE_ANON_KEY")
+)
 
 if SUPABASE_URL and SUPABASE_KEY:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
     supabase = None
-logger.warning("SUPABASE_URL or SUPABASE_KEY/SUPABASE_ANON_KEY not set. Memory will not be persisted.")
+    logger.warning(
+        "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY/SUPABASE_KEY/SUPABASE_ANON_KEY "
+        "not set. Memory will not be persisted."
+    )
 
 def init_db() -> None:
     """Supabase is managed via remote migrations. Local initialization is skipped."""
@@ -115,6 +119,40 @@ def get_recent_history(user_id: int, limit: int = 5) -> list:
     except Exception as e:
         logger.error(f"Error getting history for {user_id}: {e}")
         return []
+
+def log_event(
+    user_id: int,
+    event_type: str,
+    payload: Optional[dict] = None,
+    *,
+    endpoint: Optional[str] = None,
+    update_kind: Optional[str] = None,
+    handler: Optional[str] = None
+) -> None:
+    """
+    Append an audit event to public.user_events.
+
+    This is best-effort and never interrupts bot handling. The deployed backend
+    should use SUPABASE_SERVICE_ROLE_KEY because user_events only permits
+    service-role inserts.
+    """
+    if not supabase:
+        return
+
+    try:
+        data = {
+            "user_id": user_id,
+            "event_type": event_type,
+            "endpoint": endpoint,
+            "update_kind": update_kind,
+            "handler": handler,
+            "payload": payload or {},
+            "timestamp": time.time()
+        }
+        supabase.table("user_events").insert(data).execute()
+    except Exception as e:
+        logger.error(f"Error logging event for {user_id}: {e}")
+
 
 def clear_user_data(user_id: int) -> None:
     """Clear all data for a user."""

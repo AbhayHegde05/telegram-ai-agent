@@ -21,14 +21,13 @@ from handlers.recommendation import (
 )
 from handlers.brief import start_brief, handle_brief_movie_name
 from handlers.review import start_review, handle_review_movie_name
-from handlers.help import handle_help
-from utils.memory import init_db
+from utils.memory import init_db, log_event
 
 # Try to import the main start, endchat and handle_cancel from main
 # However, since main has polling logic and locks, we will just copy the handlers here or import them safely.
 # Since we are keeping project structure, we will import them from main but main needs to not run polling on import.
 # `main.py` has `if __name__ == '__main__': main()` so importing from it is safe.
-from main import start, endchat, handle_cancel, handle_brief_or_review_input, error_handler
+from main import start, handle_help, endchat, handle_cancel, handle_brief_or_review_input, error_handler
 
 # Configure logging
 logging.basicConfig(
@@ -49,6 +48,7 @@ if not TELEGRAM_BOT_TOKEN:
 
 # Build PTB Application with updater=None
 ptb_app = Application.builder().token(TELEGRAM_BOT_TOKEN).updater(None).build()
+ptb_app.bot_data["audit_endpoint"] = "/api/webhook"
 
 # Error handler
 ptb_app.add_error_handler(error_handler)
@@ -91,6 +91,37 @@ async def telegram_webhook(request: Request):
     try:
         data = await request.json()
         update = Update.de_json(data, ptb_app.bot)
+
+        user_id = None
+        try:
+            user_id = update.effective_user.id if update.effective_user else None
+        except Exception:
+            user_id = None
+
+        try:
+            # Safe payload (avoid dumping entire update)
+            payload = {"update_id": update.update_id}
+            if update.message:
+                if update.message.text:
+                    payload["text"] = update.message.text[:500]
+                    if update.message.text.startswith("/"):
+                        payload["command"] = update.message.text.split(maxsplit=1)[0][:100]
+                if update.message.entities:
+                    payload["has_entities"] = True
+            if update.callback_query:
+                payload["callback_data"] = (update.callback_query.data or "")[:500]
+
+            log_event(
+                user_id or 0,
+                "webhook_update",
+                payload,
+                endpoint="/api/webhook",
+                update_kind="message" if update.message else ("callback_query" if update.callback_query else "unknown"),
+                handler=None
+            )
+        except Exception as e:
+            logger.error(f"Failed to log webhook event: {e}")
+
         await ptb_app.process_update(update)
     except Exception as e:
         logger.error(f"Error processing update: {e}")
