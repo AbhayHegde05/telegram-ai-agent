@@ -7,7 +7,9 @@ from dotenv import load_dotenv
 # Load environment variables FIRST
 load_dotenv()
 
-from telegram import Update, Bot
+from telegram import Update
+
+
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
 # Import handlers (using absolute imports based on project root)
@@ -72,12 +74,24 @@ ptb_app.add_handler(CallbackQueryHandler(handle_mood_preference, pattern="^rec_m
 ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_brief_or_review_input))
 
 app = FastAPI(title="Telegram Movie Bot Webhook")
-_is_initialized = False
+
+
+@app.on_event("startup")
+async def _startup():
+    """Initialize PTB application once on cold start."""
+    global ptb_app
+    logger.info("PTB startup: initializing application")
+    await ptb_app.initialize()
+    try:
+        await ptb_app.start()
+        logger.info("PTB startup: started")
+    except Exception as e:
+        logger.warning("PTB startup: start() unsupported/failed (continuing): %s", repr(e))
 
 
 @app.post("/api/webhook")
 async def telegram_webhook(request: Request):
-    global _is_initialized
+
 
     logger.info("WEBHOOK HIT")
     logger.info(
@@ -198,15 +212,9 @@ async def telegram_webhook(request: Request):
         await ptb_app.process_update(update)
         logger.info("✅ PROCESSING UPDATE end")
 
-        # If nothing else replied, we still want to see that at least webhook handler is alive.
-        # (Do not block response if this fails.)
-        if chat_id is not None and TELEGRAM_BOT_TOKEN:
-            try:
-                diag_bot = Bot(token=TELEGRAM_BOT_TOKEN)
-                await diag_bot.send_message(chat_id=chat_id, text="Webhook received successfully")
-                logger.info("🧪 DIAG: send_message succeeded")
-            except Exception:
-                logger.exception("🧪 DIAG: send_message failed")
+        # NOTE: Do not send additional diagnostic Telegram messages from the webhook.
+        # This adds extra network round-trips and can cause webhook timeouts.
+
 
     except Exception:
         logger.exception("❌ FULL EXCEPTION TRACEBACK during webhook handler")
