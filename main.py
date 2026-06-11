@@ -33,7 +33,15 @@ from handlers.help import handle_help as send_help
 from keyboards.menu import start_menu, get_start_menu_keyboard
 from utils.helpers import rate_limiter
 from utils.states import clear_feature_state, RecommendationPreferences
-from utils.memory import init_db, load_user_data, save_user_data, add_history, log_event
+from utils.memory import (
+    init_db,
+    load_user_data,
+    save_user_data,
+    add_history,
+    log_event,
+    start_session,
+    end_session,
+)
 
 # Initialize SQLite memory database
 init_db()
@@ -144,6 +152,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         if user_id:
+            user = update.effective_user
+            chat = update.effective_chat
+            start_session(
+                user_id,
+                chat_id=chat.id if chat else None,
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                force_new=context.bot_data.get("audit_endpoint") != "/api/webhook",
+            )
             log_event(
                 user_id,
                 "handler_start",
@@ -236,10 +254,8 @@ async def endchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         pass
 
     clear_feature_state(context)
-
-    # Save cleared state
     if user_id:
-        save_user_data(user_id, {}, None)
+        end_session(user_id)
 
     await update.message.reply_text(
         "👋 Thank you for visiting Movie Assistant! See you again soon—send /start to begin anytime."

@@ -1,18 +1,19 @@
-"""
-Persistent user memory using Supabase.
-Stores user preferences and recent interactions so they survive serverless webhook instances.
-"""
+"""Session-oriented persistence using Supabase."""
 
 import logging
 import os
-import time
+from datetime import datetime, timezone
 from typing import Optional
 
-from supabase import create_client, Client
+from supabase import Client, create_client
 
 logger = logging.getLogger(__name__)
 
-# Initialize Supabase Client
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = (
     os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -21,104 +22,184 @@ SUPABASE_KEY = (
 )
 
 if SUPABASE_URL and SUPABASE_KEY:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    supabase: Optional[Client] = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
     supabase = None
     logger.warning(
-        "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY/SUPABASE_KEY/SUPABASE_ANON_KEY "
-        "not set. Memory will not be persisted."
+        "Supabase credentials are not set. Session data will not be persisted."
     )
 
+
 def init_db() -> None:
-    """Supabase is managed via remote migrations. Local initialization is skipped."""
-    if not supabase:
-        logger.warning("Database client not initialized. Ensure Supabase credentials are provided.")
+    """Report whether the remote Supabase client is available."""
+    if supabase:
+        logger.info("Supabase session storage initialized")
     else:
-        logger.info("✅ Supabase client initialized")
+        logger.warning("Supabase session storage is unavailable")
+
+
+def get_storage_status() -> dict:
+    """Check that both session tables are reachable."""
+    if not supabase:
+        return {"ok": False, "error": "Supabase client is not configured"}
+
+    try:
+        supabase.table("bot_sessions").select("id").limit(1).execute()
+        supabase.table("session_events").select("id").limit(1).execute()
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:500]}
+
+
+def _active_session(user_id: int) -> Optional[dict]:
+    if not supabase:
+        return None
+
+    response = (
+        supabase.table("bot_sessions")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("status", "active")
+        .order("started_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def start_session(
+    user_id: int,
+    *,
+    chat_id: Optional[int] = None,
+    username: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    force_new: bool = False,
+) -> Optional[str]:
+    """Open or reuse the user's active session and return its UUID."""
+    if not supabase:
+        return None
+
+    try:
+        active = _active_session(user_id)
+        if active and force_new:
+            log_event(
+                user_id,
+                "session_end",
+                {"reason": "restarted"},
+                handler="start",
+                session_id=active["id"],
+            )
+            supabase.table("bot_sessions").update(
+                {
+                    "status": "ended",
+                    "last_activity_at": _now(),
+                    "ended_at": _now(),
+                }
+            ).eq("id", active["id"]).execute()
+            active = None
+
+        identity = {
+            "chat_id": chat_id,
+            "username": username,
+            "first_name": first_name,
+            "last_name": last_name,
+            "last_activity_at": _now(),
+        }
+        identity = {key: value for key, value in identity.items() if value is not None}
+
+        if active:
+            if identity:
+                supabase.table("bot_sessions").update(identity).eq(
+                    "id", active["id"]
+                ).execute()
+            return active["id"]
+
+        data = {"user_id": user_id, **identity}
+        response = supabase.table("bot_sessions").insert(data).execute()
+        if response.data:
+            return response.data[0]["id"]
+        created = _active_session(user_id)
+        return created["id"] if created else None
+    except Exception as exc:
+        try:
+            active = _active_session(user_id)
+            if active:
+                return active["id"]
+        except Exception:
+            pass
+        logger.error("Error starting session for %s: %s", user_id, exc)
+        return None
+
+
+def end_session(user_id: int) -> None:
+    """Close the user's active session."""
+    if not supabase:
+        return
+
+    try:
+        active = _active_session(user_id)
+        if active:
+            log_event(
+                user_id,
+                "session_end",
+                {"reason": "endchat"},
+                handler="endchat",
+                session_id=active["id"],
+            )
+            supabase.table("bot_sessions").update(
+                {
+                    "status": "ended",
+                    "current_feature": None,
+                    "last_activity_at": _now(),
+                    "ended_at": _now(),
+                }
+            ).eq("id", active["id"]).execute()
+    except Exception as exc:
+        logger.error("Error ending session for %s: %s", user_id, exc)
+
 
 def load_user_data(user_id: int) -> dict:
-    """Load user data from Supabase."""
+    """Load state from the user's active session."""
     if not supabase:
         return {}
 
     try:
-        response = supabase.table("user_data").select("*").eq("user_id", user_id).execute()
-        if response.data and len(response.data) > 0:
-            row = response.data[0]
-            return {
-                'preferences': row.get('preferences', {}),
-                'current_feature': row.get('current_feature')
-            }
-        return {}
-    except Exception as e:
-        logger.error(f"Error loading user data for {user_id}: {e}")
+        session = _active_session(user_id)
+        if not session:
+            return {}
+        return {
+            "preferences": session.get("preferences") or {},
+            "current_feature": session.get("current_feature"),
+            "session_id": session.get("id"),
+        }
+    except Exception as exc:
+        logger.error("Error loading session for %s: %s", user_id, exc)
         return {}
 
-def save_user_data(user_id: int, preferences: dict, current_feature: Optional[str] = None) -> None:
-    """Save user data to Supabase."""
+
+def save_user_data(
+    user_id: int,
+    preferences: dict,
+    current_feature: Optional[str] = None,
+) -> None:
+    """Persist feature state in the user's active session."""
     if not supabase:
         return
 
     try:
-        data = {
-            "user_id": user_id,
-            "preferences": preferences,
-            "current_feature": current_feature,
-            "last_interaction": time.time()
-        }
-        supabase.table("user_data").upsert(data).execute()
-    except Exception as e:
-        logger.error(f"Error saving user data for {user_id}: {e}")
+        session_id = start_session(user_id)
+        if session_id:
+            supabase.table("bot_sessions").update(
+                {
+                    "preferences": preferences or {},
+                    "current_feature": current_feature,
+                    "last_activity_at": _now(),
+                }
+            ).eq("id", session_id).execute()
+    except Exception as exc:
+        logger.error("Error saving session state for %s: %s", user_id, exc)
 
-def add_history(user_id: int, feature: str, input_data: str = "", output_summary: str = "") -> None:
-    """Add an entry to user history."""
-    if not supabase:
-        return
-
-    try:
-        # First ensure the user_data row exists to satisfy the foreign key constraint
-        # Even if they just started, they need a row.
-        supabase.table("user_data").upsert({
-            "user_id": user_id,
-            "last_interaction": time.time()
-        }, on_conflict="user_id").execute()
-
-        data = {
-            "user_id": user_id,
-            "feature": feature,
-            "input_data": input_data,
-            "output_summary": output_summary[:500] if output_summary else "",
-            "timestamp": time.time()
-        }
-        supabase.table("user_history").insert(data).execute()
-    except Exception as e:
-        logger.error(f"Error adding history for {user_id}: {e}")
-
-def get_recent_history(user_id: int, limit: int = 5) -> list:
-    """Get recent interaction history for a user."""
-    if not supabase:
-        return []
-
-    try:
-        response = supabase.table("user_history")\
-            .select("feature, input_data, output_summary, timestamp")\
-            .eq("user_id", user_id)\
-            .order("timestamp", desc=True)\
-            .limit(limit)\
-            .execute()
-        
-        return [
-            {
-                'feature': row['feature'],
-                'input': row['input_data'],
-                'summary': row['output_summary'],
-                'timestamp': row['timestamp']
-            }
-            for row in response.data
-        ]
-    except Exception as e:
-        logger.error(f"Error getting history for {user_id}: {e}")
-        return []
 
 def log_event(
     user_id: int,
@@ -127,40 +208,84 @@ def log_event(
     *,
     endpoint: Optional[str] = None,
     update_kind: Optional[str] = None,
-    handler: Optional[str] = None
+    handler: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> None:
-    """
-    Append an audit event to public.user_events.
-
-    This is best-effort and never interrupts bot handling. The deployed backend
-    should use SUPABASE_SERVICE_ROLE_KEY because user_events only permits
-    service-role inserts.
-    """
+    """Append an event to the user's active session."""
     if not supabase:
         return
 
     try:
-        data = {
-            "user_id": user_id,
-            "event_type": event_type,
-            "endpoint": endpoint,
-            "update_kind": update_kind,
-            "handler": handler,
-            "payload": payload or {},
-            "timestamp": time.time()
-        }
-        supabase.table("user_events").insert(data).execute()
-    except Exception as e:
-        logger.error(f"Error logging event for {user_id}: {e}")
+        session_id = session_id or start_session(user_id)
+        if not session_id:
+            return
+
+        supabase.table("session_events").insert(
+            {
+                "session_id": session_id,
+                "user_id": user_id,
+                "event_type": event_type,
+                "endpoint": endpoint,
+                "update_kind": update_kind,
+                "handler": handler,
+                "payload": payload or {},
+            }
+        ).execute()
+    except Exception as exc:
+        logger.error("Error logging session event for %s: %s", user_id, exc)
+
+
+def add_history(
+    user_id: int,
+    feature: str,
+    input_data: str = "",
+    output_summary: str = "",
+) -> None:
+    """Compatibility wrapper that stores history as a session event."""
+    log_event(
+        user_id,
+        "feature_history",
+        {
+            "feature": feature,
+            "input": input_data[:500],
+            "output_summary": output_summary[:500],
+        },
+        handler=feature,
+    )
+
+
+def get_recent_history(user_id: int, limit: int = 5) -> list:
+    """Return recent feature-history events for the active session."""
+    if not supabase:
+        return []
+
+    try:
+        session = _active_session(user_id)
+        if not session:
+            return []
+        response = (
+            supabase.table("session_events")
+            .select("payload, created_at")
+            .eq("session_id", session["id"])
+            .eq("event_type", "feature_history")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return [
+            {
+                "feature": row["payload"].get("feature"),
+                "input": row["payload"].get("input"),
+                "summary": row["payload"].get("output_summary"),
+                "timestamp": row["created_at"],
+            }
+            for row in response.data
+        ]
+    except Exception as exc:
+        logger.error("Error loading history for %s: %s", user_id, exc)
+        return []
 
 
 def clear_user_data(user_id: int) -> None:
-    """Clear all data for a user."""
-    if not supabase:
-        return
-
-    try:
-        # Due to ON DELETE CASCADE on user_history, deleting user_data removes history too
-        supabase.table("user_data").delete().eq("user_id", user_id).execute()
-    except Exception as e:
-        logger.error(f"Error clearing data for {user_id}: {e}")
+    """Compatibility alias for closing the active session."""
+    end_session(user_id)

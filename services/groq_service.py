@@ -53,6 +53,7 @@ class GroqService:
 
             self.client = AsyncGroq(**kwargs)
             self.model = GROQ_MODEL
+            self.last_error = None
             logger.info(
                 f"✅ Groq client initialized (Model: {self.model}, URL: {getattr(self.client, 'base_url', 'n/a')}, normalized_base_url={normalized_base_url or 'default'})"
             )
@@ -76,6 +77,7 @@ class GroqService:
 
         for attempt in range(max_retries):
             try:
+                self.last_error = None
                 logger.info(f"Groq API call attempt {attempt + 1}/{max_retries} (model={self.model})")
                 response = await self.client.chat.completions.create(
                     model=self.model,
@@ -87,6 +89,7 @@ class GroqService:
                 return response.choices[0].message.content
             except Exception as e:
                 error_msg = f"{type(e).__name__}: {e}"
+                self.last_error = error_msg
                 logger.error(f"Groq API error (attempt {attempt + 1}/{max_retries}): {error_msg}")
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)
@@ -162,7 +165,12 @@ Please provide:
 - 🎭 Genre
 - 📖 Story Summary (200-400 words, no major spoilers, mention central theme, setting, and key characters)
 
-Format it clearly and professionally. If the movie information is insufficient or unreliable, respond with: "Sorry, I couldn't find reliable information for that movie." """
+Use reliable general movie knowledge when the search results are unavailable or
+incomplete. Do not invent facts. If multiple movies have the same title and the
+year or language cannot be determined, respond exactly with:
+"AMBIGUOUS_TITLE: Please include the release year or language."
+
+Format it clearly and professionally."""
 
         response = await self._safe_api_call(
             [{"role": "user", "content": prompt}],
@@ -203,6 +211,11 @@ Please provide a detailed review with the following sections. For each section, 
 9. 👎 Weaknesses (2 bullet points)
 10. ⭐ Overall Verdict (short conclusion)
 11. 🎯 Final Rating (derived from all sections)
+
+Use reliable general movie knowledge when search results are unavailable or
+incomplete. Do not invent ratings or reception. If multiple movies have the
+same title and the year or language cannot be determined, respond exactly with:
+"AMBIGUOUS_TITLE: Please include the release year or language."
 
 Format with clear separators (━━━━━━━━━━━━━━) between sections. Use the exact emojis provided."""
 

@@ -9,6 +9,8 @@ load_dotenv()
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram import Bot
+
 
 # Import handlers (using absolute imports based on project root)
 from handlers.recommendation import (
@@ -85,6 +87,8 @@ async def telegram_webhook(request: Request):
     """Handle incoming webhook updates from Telegram."""
     global _is_initialized
 
+    # 1) WEBHOOK HIT
+    logger.info("WEBHOOK HIT")
     logger.info(
         "📨 Webhook request received: method=%s path=%s headers=%s",
         request.method,
@@ -92,32 +96,66 @@ async def telegram_webhook(request: Request):
         dict(request.headers),
     )
 
-
     if not _is_initialized:
-        logger.info("⚙️ PTB initialize() starting (webhook first call)...")
+
+        # 3) APPLICATION INITIALIZED
+        logger.info("APPLICATION INITIALIZED (starting) -> ptb_app.initialize()")
         try:
             await ptb_app.initialize()
+            logger.info("APPLICATION INITIALIZED")
+
             # IMPORTANT: in webhook mode for ptb v21, initialize() is generally enough.
             # But to be safe in serverless environments, also start the internal
             # task/webhook lifecycle if required by the PTB version.
+            # 4) APPLICATION STARTED
             try:
                 await ptb_app.start()
-                logger.info("✅ PTB start() completed (webhook mode).")
+                logger.info("APPLICATION STARTED (ptb_app.start())")
             except Exception as e:
-                logger.warning("⚠️ PTB start() failed/unsupported (continuing): %s", repr(e))
+                logger.warning("⚠️ APPLICATION START FAILED/UNSUPPORTED (continuing): %s", repr(e))
+
 
             _is_initialized = True
             logger.info("✅ PTB initialize() completed.")
         except Exception as e:
-            logger.critical("❌ PTB initialize() failed: %s", repr(e), exc_info=True)
-            # Return 200 to avoid Telegram retries if the error is deterministic.
-            return Response(status_code=200)
+            logger.critical("❌ APPLICATION INITIALIZATION FAILED: %s", repr(e), exc_info=True)
+            raise
+
+
 
     try:
+        # 2) UPDATE RECEIVED
+        logger.info("UPDATE RECEIVED (about to read request.json())")
         data = await request.json()
-        logger.info("🧾 Webhook payload received (keys=%s)", list(data.keys()))
+        logger.info("UPDATE RECEIVED (payload keys=%s)", list(data.keys()))
+
 
         update = Update.de_json(data, ptb_app.bot)
+
+        # 7) DIAGNOSTIC SEND (bypass PTB handlers)
+        try:
+            chat_id = None
+            if update.message and update.message.chat:
+                chat_id = update.message.chat.id
+            elif update.effective_chat:
+                chat_id = update.effective_chat.id
+
+            logger.info("🧪 DIAG: extracted chat_id=%s", chat_id)
+            if chat_id is not None and TELEGRAM_BOT_TOKEN:
+                diag_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+                resp = await diag_bot.send_message(
+                    chat_id=chat_id,
+                    text="Webhook received successfully",
+                )
+                logger.info("🧪 DIAG: send_message response=%s", getattr(resp, "to_dict", lambda: str(resp))())
+            else:
+                logger.warning("🧪 DIAG: chat_id missing or token missing")
+        except Exception as e:
+            logger.exception("🧪 DIAG: send_message failed: %s", repr(e))
+
+        # 6) START HANDLER ENTERED will be logged from main.py start() handler.
+
+
 
         # Determine update kind for logging / debugging
         update_kind = "unknown"
@@ -200,12 +238,14 @@ async def telegram_webhook(request: Request):
                     handler=None,
                     session_id=session_id,
                 )
-        except Exception as e:
-            logger.error(f"Failed to log webhook event: {e}")
+        except Exception:
+            logger.exception("❌ FAILED to log webhook event payload (non-fatal)")
 
-        logger.info("🚦 process_update() start")
+        # 5) PROCESSING UPDATE
+        logger.info("PROCESSING UPDATE start")
         await ptb_app.process_update(update)
-        logger.info("✅ process_update() end")
+        logger.info("✅ PROCESSING UPDATE end")
+
 
         # Reply delivery trace (best-effort): if process_update didn't raise, replies likely already sent.
         try:
@@ -220,12 +260,15 @@ async def telegram_webhook(request: Request):
                     (update.callback_query.data[:200] if update.callback_query.data else None),
                 )
         except Exception:
-            pass
+            logger.exception("❌ REPLY delivery trace failed")
 
     except Exception as e:
-        logger.error("❌ Error processing update: %s", repr(e), exc_info=True)
-        # Return 200 anyway so Telegram doesn't keep retrying the failed update
+        logger.exception("❌ FULL EXCEPTION TRACEBACK during webhook handler")
+        raise
+
     return Response(status_code=200)
+
+
 
 
 @app.get("/api/set_webhook")

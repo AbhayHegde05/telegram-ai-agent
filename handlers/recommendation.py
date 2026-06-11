@@ -18,11 +18,29 @@ from keyboards.menu import (
 )
 from utils.states import init_user_data, get_preferences, set_current_feature, RecommendationPreferences
 from utils.helpers import split_message
-from utils.memory import load_user_data, save_user_data, add_history
+from utils.memory import load_user_data, save_user_data, add_history, log_event
 from services.groq_service import get_groq_service
 from services.search_service import SearchService
 
 logger = logging.getLogger(__name__)
+
+
+def _load_persisted_preferences(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Restore recommendation state after a serverless cold start."""
+    if context.user_data.get("preferences"):
+        return
+
+    user_id = update.effective_user.id if update.effective_user else None
+    if not user_id:
+        return
+
+    saved = load_user_data(user_id)
+    if saved:
+        context.user_data.update(saved)
+        if isinstance(saved.get("preferences"), dict):
+            context.user_data["preferences"] = RecommendationPreferences.from_dict(
+                saved["preferences"]
+            )
 
 
 async def start_recommendation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -46,6 +64,9 @@ async def start_recommendation(update: Update, context: ContextTypes.DEFAULT_TYP
 
         init_user_data(context)
         set_current_feature(context, 'recommendation')
+        if user_id:
+            preferences = get_preferences(context)
+            save_user_data(user_id, preferences.to_dict(), 'recommendation')
 
         # Start with language question (use a new message so steps don't "merge")
         await query.message.reply_text(
@@ -65,6 +86,7 @@ async def handle_language_selection(update: Update, context: ContextTypes.DEFAUL
     try:
         query = update.callback_query
         await query.answer()
+        _load_persisted_preferences(update, context)
 
         # Extract language from callback data
         language = query.data.replace("rec_lang_", "").capitalize()
@@ -72,6 +94,9 @@ async def handle_language_selection(update: Update, context: ContextTypes.DEFAUL
         # Store preference
         preferences = get_preferences(context)
         preferences.language = language
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id:
+            save_user_data(user_id, preferences.to_dict(), 'recommendation')
 
         # Move to genre question (new message)
         await query.message.reply_text(
@@ -91,6 +116,7 @@ async def handle_genre_selection(update: Update, context: ContextTypes.DEFAULT_T
     try:
         query = update.callback_query
         await query.answer()
+        _load_persisted_preferences(update, context)
 
         # Extract genre from callback data
         genre = query.data.replace("rec_genre_", "").capitalize()
@@ -98,6 +124,9 @@ async def handle_genre_selection(update: Update, context: ContextTypes.DEFAULT_T
         # Store preference
         preferences = get_preferences(context)
         preferences.genre = genre
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id:
+            save_user_data(user_id, preferences.to_dict(), 'recommendation')
 
         # Move to duration question (new message)
         await query.message.reply_text(
@@ -117,6 +146,7 @@ async def handle_duration_selection(update: Update, context: ContextTypes.DEFAUL
     try:
         query = update.callback_query
         await query.answer()
+        _load_persisted_preferences(update, context)
 
         # Extract duration from callback data
         duration_map = {
@@ -130,6 +160,9 @@ async def handle_duration_selection(update: Update, context: ContextTypes.DEFAUL
         # Store preference
         preferences = get_preferences(context)
         preferences.duration = duration
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id:
+            save_user_data(user_id, preferences.to_dict(), 'recommendation')
 
         # Move to release preference question (new message)
         await query.message.reply_text(
@@ -149,6 +182,7 @@ async def handle_release_preference(update: Update, context: ContextTypes.DEFAUL
     try:
         query = update.callback_query
         await query.answer()
+        _load_persisted_preferences(update, context)
 
         # Extract release preference from callback data
         release_map = {
@@ -162,6 +196,9 @@ async def handle_release_preference(update: Update, context: ContextTypes.DEFAUL
         # Store preference
         preferences = get_preferences(context)
         preferences.release = release
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id:
+            save_user_data(user_id, preferences.to_dict(), 'recommendation')
 
         # Move to mood preference question (new message)
         await query.message.reply_text(
@@ -182,6 +219,7 @@ async def handle_mood_preference(update: Update, context: ContextTypes.DEFAULT_T
     try:
         query = update.callback_query
         await query.answer()
+        _load_persisted_preferences(update, context)
 
         user_id = update.effective_user.id if update.effective_user else None
 
@@ -227,6 +265,18 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
     """
     try:
         preferences = get_preferences(context)
+        user_id = query.from_user.id if query.from_user else None
+        endpoint = context.bot_data.get("audit_endpoint", "bot.polling")
+
+        if user_id:
+            log_event(
+                user_id,
+                "recommendation_input",
+                {"preferences": preferences.to_dict()},
+                endpoint=endpoint,
+                update_kind="callback_query",
+                handler="generate_recommendations"
+            )
 
         # Initialize services
         try:
@@ -242,6 +292,15 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
         # Generate search query
         try:
             search_query = await groq_service.generate_search_query(preferences.to_dict())
+            if groq_service.last_error and user_id:
+                log_event(
+                    user_id,
+                    "service_error",
+                    {"service": "groq", "error": groq_service.last_error[:500], "stage": "search_query"},
+                    endpoint=endpoint,
+                    update_kind="callback_query",
+                    handler="generate_recommendations"
+                )
         except Exception as e:
             logger.error(f"Error generating search query: {e}")
             search_query = f"{preferences.genre} movies"
@@ -249,6 +308,15 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
         # Search for movies
         try:
             search_results = await search_service.search_movies(search_query, num_results=10)
+            if search_service.last_error and user_id:
+                log_event(
+                    user_id,
+                    "service_error",
+                    {"service": "tavily", "error": search_service.last_error[:500], "stage": "movie_search"},
+                    endpoint=endpoint,
+                    update_kind="callback_query",
+                    handler="generate_recommendations"
+                )
         except Exception as e:
             logger.error(f"Search error: {e}")
             search_results = "Unable to search movies. Using general information."
@@ -262,9 +330,28 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
             
             if recommendations is None:
                 raise Exception("Groq returned None")
+            if groq_service.last_error and user_id:
+                log_event(
+                    user_id,
+                    "service_error",
+                    {"service": "groq", "error": groq_service.last_error[:500], "stage": "recommendations"},
+                    endpoint=endpoint,
+                    update_kind="callback_query",
+                    handler="generate_recommendations"
+                )
         except Exception as e:
             logger.error(f"Error generating recommendations: {e}")
             recommendations = "Sorry, I couldn't generate recommendations at this time. Please try again."
+
+        if user_id:
+            log_event(
+                user_id,
+                "recommendation_output",
+                {"recommendations": (recommendations or "")[:1500]},
+                endpoint=endpoint,
+                update_kind="callback_query",
+                handler="generate_recommendations"
+            )
 
         # Build the full response
         full_response = (

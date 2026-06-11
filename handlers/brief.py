@@ -10,12 +10,16 @@ from telegram.error import TelegramError
 
 from keyboards.menu import get_start_menu_keyboard
 from utils.states import init_user_data, set_current_feature
-from utils.memory import log_event
+from utils.memory import log_event, save_user_data
 from utils.helpers import split_message, sanitize_movie_name, is_valid_movie_name
 from services.groq_service import get_groq_service
 from services.search_service import SearchService
 
 logger = logging.getLogger(__name__)
+
+
+def _is_ambiguous_title_response(text: str) -> bool:
+    return (text or "").strip().startswith("AMBIGUOUS_TITLE:")
 
 
 async def start_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -29,6 +33,9 @@ async def start_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         init_user_data(context)
         set_current_feature(context, 'brief')
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id:
+            save_user_data(user_id, {}, 'brief')
 
         await query.edit_message_text(
             text="📖 Movie Brief\n\n"
@@ -69,6 +76,14 @@ async def handle_brief_movie_name(update: Update, context: ContextTypes.DEFAULT_
             )
             return
 
+        if len(movie_name.strip()) == 1:
+            await update.message.reply_text(
+                f"I found multiple movies that could match '{movie_name}'. "
+                "Please include the release year or language.\n\n"
+                "Example: A 1998 Kannada"
+            )
+            return
+
         # Show processing message
         processing_message = await update.message.reply_text(
             f"🔍 Searching for '{movie_name}'...\n"
@@ -90,9 +105,31 @@ async def handle_brief_movie_name(update: Update, context: ContextTypes.DEFAULT_
         # Search for movie information
         try:
             search_results = await search_service.search_movie_info(movie_name)
+            if search_service.last_error and user_id:
+                log_event(
+                    user_id,
+                    "service_error",
+                    {
+                        "service": "tavily",
+                        "error": search_service.last_error[:500],
+                        "movie_name": movie_name[:200],
+                    },
+                    endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
+                    update_kind="message",
+                    handler="handle_brief_movie_name"
+                )
         except Exception as e:
             logger.error(f"Search error: {e}")
             search_results = f"Movie: {movie_name}\nSearch results unavailable. Please try another movie."
+            if user_id:
+                log_event(
+                    user_id,
+                    "service_error",
+                    {"service": "tavily", "error": str(e)[:500], "movie_name": movie_name[:200]},
+                    endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
+                    update_kind="message",
+                    handler="handle_brief_movie_name"
+                )
 
         # Generate brief
         try:
@@ -100,9 +137,39 @@ async def handle_brief_movie_name(update: Update, context: ContextTypes.DEFAULT_
 
             if brief is None:
                 raise Exception("Groq returned None")
+            if groq_service.last_error and user_id:
+                log_event(
+                    user_id,
+                    "service_error",
+                    {
+                        "service": "groq",
+                        "error": groq_service.last_error[:500],
+                        "movie_name": movie_name[:200],
+                    },
+                    endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
+                    update_kind="message",
+                    handler="handle_brief_movie_name"
+                )
         except Exception as e:
             logger.error(f"Error generating brief: {e}")
-            brief = f"Sorry, I couldn't find reliable information for '{movie_name}'."
+            brief = "Sorry, I couldn't generate a brief right now. Please try again shortly."
+            if user_id:
+                log_event(
+                    user_id,
+                    "service_error",
+                    {"service": "groq", "error": str(e)[:500], "movie_name": movie_name[:200]},
+                    endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
+                    update_kind="message",
+                    handler="handle_brief_movie_name"
+                )
+
+        if _is_ambiguous_title_response(brief):
+            await processing_message.edit_text(
+                f"I found multiple movies named '{movie_name}'. "
+                "Please send the title again with its release year or language.\n\n"
+                "Example: A 1998 Kannada"
+            )
+            return
 
         if user_id:
             try:
