@@ -1,7 +1,10 @@
 # TODO
 
-- [ ] Add/align Supabase env var handling so `SUPABASE_ANON_KEY` and `SUPABASE_KEY` both work
-- [ ] (Optional) Add debug logging around history writes to confirm inserts happen
-- [ ] Verify that `handle_brief_or_review_input()` is triggered in webhook mode and that `current_feature` becomes `brief`/`review`
-- [ ] Run a quick local smoke test (if possible) to confirm rows are inserted into `user_history`
+- [x] Inspect webhook execution path (FastAPI -> ptb_app.initialize() -> Update.de_json -> ptb_app.process_update(update))
+- [x] Verify python-telegram-bot webhook mode requirements (initialize vs start)
+- [x] Add detailed logging across the full flow: webhook receipt, init/start, update parsing, handler matching, /start execution, reply sending, exceptions
+- [ ] Trace to exact failure point (identify if handler not registered, handler not matched, reply blocked, or app not started)
+- [ ] Implement fix (ensure correct Application lifecycle for webhook in this FastAPI serverless setup)
+- [ ] Commit fix to current branch and document root cause
+
 

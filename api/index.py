@@ -21,7 +21,7 @@ from handlers.recommendation import (
 )
 from handlers.brief import start_brief, handle_brief_movie_name
 from handlers.review import start_review, handle_review_movie_name
-from utils.memory import init_db, log_event
+from utils.memory import get_storage_status, init_db, log_event, start_session
 
 # Try to import the main start, endchat and handle_cancel from main
 # However, since main has polling logic and locks, we will just copy the handlers here or import them safely.
@@ -84,13 +84,77 @@ _is_initialized = False
 async def telegram_webhook(request: Request):
     """Handle incoming webhook updates from Telegram."""
     global _is_initialized
+
+    logger.info(
+        "📨 Webhook request received: method=%s path=%s headers=%s",
+        request.method,
+        request.url.path,
+        dict(request.headers),
+    )
+
+
     if not _is_initialized:
-        await ptb_app.initialize()
-        _is_initialized = True
+        logger.info("⚙️ PTB initialize() starting (webhook first call)...")
+        try:
+            await ptb_app.initialize()
+            # IMPORTANT: in webhook mode for ptb v21, initialize() is generally enough.
+            # But to be safe in serverless environments, also start the internal
+            # task/webhook lifecycle if required by the PTB version.
+            try:
+                await ptb_app.start()
+                logger.info("✅ PTB start() completed (webhook mode).")
+            except Exception as e:
+                logger.warning("⚠️ PTB start() failed/unsupported (continuing): %s", repr(e))
+
+            _is_initialized = True
+            logger.info("✅ PTB initialize() completed.")
+        except Exception as e:
+            logger.critical("❌ PTB initialize() failed: %s", repr(e), exc_info=True)
+            # Return 200 to avoid Telegram retries if the error is deterministic.
+            return Response(status_code=200)
 
     try:
         data = await request.json()
+        logger.info("🧾 Webhook payload received (keys=%s)", list(data.keys()))
+
         update = Update.de_json(data, ptb_app.bot)
+
+        # Determine update kind for logging / debugging
+        update_kind = "unknown"
+        try:
+            if update.message:
+                update_kind = "message"
+            elif update.callback_query:
+                update_kind = "callback_query"
+        except Exception:
+            pass
+
+        logger.info(
+
+            "🧭 Update kind=%s has_message=%s has_callback=%s",
+            update_kind,
+            bool(getattr(update, "message", None)),
+            bool(getattr(update, "callback_query", None)),
+        )
+
+        logger.info(
+            "🧩 Update parsed: update_id=%s effective_user=%s message_text=%s callback_data=%s has_message=%s has_callback=%s",
+            getattr(update, "update_id", None),
+            (update.effective_user.id if update.effective_user else None),
+            (update.message.text[:200] if update.message and update.message.text else None),
+            (update.callback_query.data[:200] if update.callback_query and update.callback_query.data else None),
+            bool(getattr(update, "message", None)),
+            bool(getattr(update, "callback_query", None)),
+        )
+
+        # Trace the PTB internal handler matching process (best-effort)
+        try:
+            matched = ptb_app.update_processor._check_update(update)  # type: ignore[attr-defined]
+            logger.info("🎯 Handler matching result (raw)=%s", repr(matched))
+        except Exception as e:
+            logger.debug("🎯 Handler matching trace not available: %s", repr(e))
+
+
 
         user_id = None
         try:
@@ -111,22 +175,58 @@ async def telegram_webhook(request: Request):
             if update.callback_query:
                 payload["callback_data"] = (update.callback_query.data or "")[:500]
 
-            log_event(
-                user_id or 0,
-                "webhook_update",
-                payload,
-                endpoint="/api/webhook",
-                update_kind="message" if update.message else ("callback_query" if update.callback_query else "unknown"),
-                handler=None
-            )
+            if user_id:
+                user = update.effective_user
+                chat = update.effective_chat
+                command = (
+                    update.message.text.split(maxsplit=1)[0].split("@")[0]
+                    if update.message and update.message.text
+                    else None
+                )
+                session_id = start_session(
+                    user_id,
+                    chat_id=chat.id if chat else None,
+                    username=user.username,
+                    first_name=user.first_name,
+                    last_name=user.last_name,
+                    force_new=command == "/start",
+                )
+                log_event(
+                    user_id,
+                    "webhook_update",
+                    payload,
+                    endpoint="/api/webhook",
+                    update_kind="message" if update.message else ("callback_query" if update.callback_query else "unknown"),
+                    handler=None,
+                    session_id=session_id,
+                )
         except Exception as e:
             logger.error(f"Failed to log webhook event: {e}")
 
+        logger.info("🚦 process_update() start")
         await ptb_app.process_update(update)
+        logger.info("✅ process_update() end")
+
+        # Reply delivery trace (best-effort): if process_update didn't raise, replies likely already sent.
+        try:
+            if update.message:
+                logger.info(
+                    "📤 Reply should be sent for message: text=%s",
+                    (update.message.text[:200] if update.message.text else None),
+                )
+            elif update.callback_query:
+                logger.info(
+                    "📤 Reply should be sent for callback: data=%s",
+                    (update.callback_query.data[:200] if update.callback_query.data else None),
+                )
+        except Exception:
+            pass
+
     except Exception as e:
-        logger.error(f"Error processing update: {e}")
+        logger.error("❌ Error processing update: %s", repr(e), exc_info=True)
         # Return 200 anyway so Telegram doesn't keep retrying the failed update
     return Response(status_code=200)
+
 
 @app.get("/api/set_webhook")
 async def set_webhook():
@@ -148,3 +248,21 @@ async def set_webhook():
 @app.get("/")
 def root():
     return {"status": "ok", "message": "Movie Bot Serverless Backend is running"}
+
+
+@app.get("/api/health/config")
+def config_health():
+    """Report configuration presence without exposing secret values."""
+    required = {
+        "telegram": bool(TELEGRAM_BOT_TOKEN),
+        "groq": bool(os.getenv("GROQ_API_KEY")),
+        "tavily": bool(os.getenv("TAVILY_API_KEY")),
+        "supabase_url": bool(os.getenv("SUPABASE_URL")),
+        "supabase_service_role": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
+    }
+    storage = get_storage_status()
+    return {
+        "status": "ok" if all(required.values()) and storage["ok"] else "not_ready",
+        "configured": required,
+        "storage": storage,
+    }
