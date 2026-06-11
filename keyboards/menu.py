@@ -6,12 +6,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 def get_start_menu_keyboard():
-    """
-    Main menu keyboard with three options:
-    - Movie Recommendation
-    - Movie Brief
-    - Movie Review
-    """
+    """Main menu keyboard with three options."""
     keyboard = [
         [InlineKeyboardButton("🎯 Movie Recommendation", callback_data="rec_start")],
         [InlineKeyboardButton("📖 Movie Brief", callback_data="brief_start")],
@@ -21,9 +16,7 @@ def get_start_menu_keyboard():
 
 
 def get_language_keyboard():
-    """
-    Language selection keyboard for recommendations
-    """
+    """Language selection keyboard for recommendations."""
     keyboard = [
         [InlineKeyboardButton("English", callback_data="rec_lang_english")],
         [InlineKeyboardButton("Hindi", callback_data="rec_lang_hindi")],
@@ -38,9 +31,7 @@ def get_language_keyboard():
 
 
 def get_genre_keyboard():
-    """
-    Genre selection keyboard for recommendations
-    """
+    """Genre selection keyboard for recommendations."""
     keyboard = [
         [InlineKeyboardButton("Action", callback_data="rec_genre_action")],
         [InlineKeyboardButton("Thriller", callback_data="rec_genre_thriller")],
@@ -58,9 +49,7 @@ def get_genre_keyboard():
 
 
 def get_duration_keyboard():
-    """
-    Duration selection keyboard for recommendations
-    """
+    """Duration selection keyboard for recommendations."""
     keyboard = [
         [InlineKeyboardButton("Less than 2 hours", callback_data="rec_duration_short")],
         [InlineKeyboardButton("2-3 hours", callback_data="rec_duration_medium")],
@@ -72,9 +61,7 @@ def get_duration_keyboard():
 
 
 def get_release_preference_keyboard():
-    """
-    Release preference selection keyboard for recommendations
-    """
+    """Release preference selection keyboard for recommendations."""
     keyboard = [
         [InlineKeyboardButton("Latest", callback_data="rec_release_latest")],
         [InlineKeyboardButton("Last 5 Years", callback_data="rec_release_5years")],
@@ -86,9 +73,7 @@ def get_release_preference_keyboard():
 
 
 def get_mood_preference_keyboard():
-    """
-    Mood preference selection keyboard for recommendations
-    """
+    """Mood preference selection keyboard for recommendations."""
     keyboard = [
         [InlineKeyboardButton("Mind-Blowing", callback_data="rec_mood_mindblowing")],
         [InlineKeyboardButton("Feel-Good", callback_data="rec_mood_feelgood")],
@@ -103,14 +88,32 @@ def get_mood_preference_keyboard():
 
 
 async def start_menu(update, context):
-    """
-    Display the start menu
+    """Display the start menu.
+
+    Webhook updates sometimes arrive without `update.message` populated in PTB's Update object.
+    This function falls back to context.bot.send_message when needed.
     """
     message_text = """🎬 Welcome to Movie Assistant
 
 Choose what you would like to do:"""
 
-    await update.message.reply_text(
-        message_text,
-        reply_markup=get_start_menu_keyboard()
+    chat_id = None
+    if getattr(update, "effective_chat", None) is not None:
+        chat_id = update.effective_chat.id
+
+    if getattr(update, "message", None) is not None:
+        return await update.message.reply_text(
+            message_text,
+            reply_markup=get_start_menu_keyboard(),
+        )
+
+    if chat_id is None:
+        # last resort; can't send
+        return None
+
+    return await context.bot.send_message(
+        chat_id=chat_id,
+        text=message_text,
+        reply_markup=get_start_menu_keyboard(),
     )
+

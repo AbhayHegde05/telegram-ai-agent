@@ -1,10 +1,14 @@
 # TODO
 
-- [x] Inspect webhook execution path (FastAPI -> ptb_app.initialize() -> Update.de_json -> ptb_app.process_update(update))
-- [x] Verify python-telegram-bot webhook mode requirements (initialize vs start)
-- [x] Add detailed logging across the full flow: webhook receipt, init/start, update parsing, handler matching, /start execution, reply sending, exceptions
-- [ ] Trace to exact failure point (identify if handler not registered, handler not matched, reply blocked, or app not started)
-- [ ] Implement fix (ensure correct Application lifecycle for webhook in this FastAPI serverless setup)
-- [ ] Commit fix to current branch and document root cause
+## Investigation + Fix Webhook Delivery (/start not responding)
+- [ ] Fix FastAPI webhook routing for Vercel: ensure correct route is deployed (likely missing correct `vercel.json` for `/api/(.*)` mapping).
+- [ ] Fix PTB webhook lifecycle for serverless: ensure `ptb_app.initialize()` + `ptb_app.start()` is correct (or avoid `start()` if unsupported).
+- [ ] Ensure PTB can send messages: add explicit API call logging and remove silent exception swallowing in `/start` and webhook diag.
+- [ ] Patch `start()` to never assume `update.message` exists; fallback to `context.bot.send_message(chat_id, ...)`.
+- [ ] Patch `keyboards/menu.py start_menu()` to also fallback when `update.message` missing.
+- [ ] Add per-update logs: handler matching + `/start` entry + before/after `process_update()`.
+- [ ] Run local test using a sample Telegram update payload against `/api/webhook`.
 
-
+## Validation
+- [ ] Deploy and trigger `/start`.
+- [ ] Confirm: webhook POST returns 200, `/start` handler log appears, and at least one `sendMessage` request is logged.

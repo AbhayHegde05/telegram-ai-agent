@@ -53,15 +53,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
         self.wfile.write(b"OK")
-    
+
     def log_message(self, format, *args):
         pass
+
 
 def run_dummy_server(port):
     try:
@@ -70,6 +72,7 @@ def run_dummy_server(port):
         server.serve_forever()
     except Exception as e:
         logger.error(f"Failed to start dummy server: {e}")
+
 
 # Get bot token
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -83,23 +86,23 @@ logger.info("✅ Bot token loaded successfully")
 LOCK_FILE = os.path.join(os.path.dirname(__file__), ".bot_lock")
 LOCK_STALE_SECONDS = 300  # treat locks older than 5 minutes as stale
 
+
 def _is_pid_running(pid: int) -> bool:
     """
     Best-effort PID liveness check on Windows.
     """
     try:
-        # Signal 0 works on *nix; on Windows we fall back to tasklist
         import subprocess
         out = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}"],
             capture_output=True,
             text=True,
-            check=False
+            check=False,
         ).stdout
         return str(pid) in out
     except Exception:
-        # If we can't verify, assume not running (safer for recovery)
         return False
+
 
 def _acquire_lock() -> None:
     """
@@ -117,16 +120,13 @@ def _acquire_lock() -> None:
 
             lock_age = time.time() - os.path.getmtime(LOCK_FILE)
 
-            # If lock is stale, overwrite it.
             if lock_age > LOCK_STALE_SECONDS:
                 logger.warning(f"⚠️ Stale bot lock detected (age={int(lock_age)}s). Overwriting {LOCK_FILE}.")
             else:
-                # If lock is fresh and PID appears running, block.
                 if existing_pid and existing_pid.isdigit():
                     pid_int = int(existing_pid)
                     if _is_pid_running(pid_int):
                         raise RuntimeError(f"Bot lock exists (pid={existing_pid}) at {LOCK_FILE}")
-                # If PID isn't running, treat as stale and overwrite.
                 logger.warning(f"⚠️ Bot lock exists but pid is not running. Overwriting {LOCK_FILE}.")
 
         with open(LOCK_FILE, "w", encoding="utf-8") as f:
@@ -135,20 +135,26 @@ def _acquire_lock() -> None:
         logger.critical(f"❌ Unable to acquire bot lock: {e}")
         raise
 
+
 def _release_lock() -> None:
     try:
         if os.path.exists(LOCK_FILE):
             os.remove(LOCK_FILE)
     except Exception:
-        # Don't crash on lock release
         pass
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Start command - Display main menu
-    """
+    """Start command - Display main menu"""
     user_id = update.effective_user.id if update.effective_user else None
+    chat_id = update.effective_chat.id if update.effective_chat else None
+
+    logger.info(
+        "🚦 START handler entry user_id=%s chat_id=%s has_message=%s",
+        user_id,
+        chat_id,
+        bool(update.message),
+    )
 
     try:
         if user_id:
@@ -168,19 +174,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 {"command": "start"},
                 endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
                 update_kind="message",
-                handler="start"
+                handler="start",
             )
     except Exception:
-        pass
+        logger.exception("❌ Error inside START session/logging")
+        # do not return; we still try to send the menu
 
     if user_id:
-        saved = load_user_data(user_id)
-        if saved:
-            context.user_data.update(saved)
-            if 'preferences' in saved and isinstance(saved['preferences'], dict):
-                context.user_data['preferences'] = RecommendationPreferences.from_dict(saved['preferences'])
+        try:
+            saved = load_user_data(user_id)
+            if saved:
+                context.user_data.update(saved)
+                if 'preferences' in saved and isinstance(saved['preferences'], dict):
+                    context.user_data['preferences'] = RecommendationPreferences.from_dict(saved['preferences'])
+        except Exception:
+            logger.exception("❌ Error loading user data in START")
 
-    await start_menu(update, context)
+    # Primary path (old behavior)
+    if update.message is not None:
+        logger.info("📨 START sending menu via update.message.reply_text")
+        await start_menu(update, context)
+        return
+
+    # Fallback for webhook cases where update.message may be missing
+    if chat_id is None:
+        logger.error("❌ START cannot send menu: chat_id is None")
+        return
+
+    logger.info("📨 START fallback sending menu via context.bot.send_message")
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="🎬 Welcome to Movie Assistant\n\nChoose what you would like to do:",
+        reply_markup=get_start_menu_keyboard(),
+    )
 
 
 async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -193,16 +219,14 @@ async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             {"command": "help"},
             endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
             update_kind="message",
-            handler="help"
+            handler="help",
         )
 
     await send_help(update, context)
 
 
 async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Cancel current flow and return to main menu
-    """
+    """Cancel current flow and return to main menu"""
     try:
         user_id = update.effective_user.id if update.effective_user else None
         if user_id:
@@ -212,10 +236,10 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 {"callback": "cancel"},
                 endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
                 handler="handle_cancel",
-                update_kind="callback_query"
+                update_kind="callback_query",
             )
     except Exception:
-        pass
+        logger.exception("❌ error in handle_cancel logging")
 
     query = update.callback_query
     await query.answer()
@@ -223,23 +247,18 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = update.effective_user.id if update.effective_user else None
     clear_feature_state(context)
 
-    # Save cleared state
     if user_id:
         save_user_data(user_id, {}, None)
 
     await query.edit_message_text(
-        text="✅ Cancelled.\n\n"
-             "Choose what you would like to do:",
-        reply_markup=get_start_menu_keyboard()
+        text="✅ Cancelled.\n\nChoose what you would like to do:",
+        reply_markup=get_start_menu_keyboard(),
     )
 
 
 async def endchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    End chat flow and clear user state.
-    """
+    """End chat flow and clear user state."""
     user_id = update.effective_user.id if update.effective_user else None
-
     try:
         if user_id:
             log_event(
@@ -248,10 +267,10 @@ async def endchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 {"command": "endchat"},
                 endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
                 update_kind="message",
-                handler="endchat"
+                handler="endchat",
             )
     except Exception:
-        pass
+        logger.exception("❌ error in endchat logging")
 
     clear_feature_state(context)
     if user_id:
@@ -263,11 +282,9 @@ async def endchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_brief_or_review_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Route text input to brief or review handlers based on current state
-    """
-    # Rate limiting check
+    """Route text input to brief or review handlers based on current state"""
     user_id = update.effective_user.id if update.effective_user else None
+
     if user_id:
         try:
             if update.message and update.message.text:
@@ -277,10 +294,10 @@ async def handle_brief_or_review_input(update: Update, context: ContextTypes.DEF
                     {"feature_router_text": update.message.text[:200]},
                     endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
                     handler="handle_brief_or_review_input",
-                    update_kind="message"
+                    update_kind="message",
                 )
         except Exception:
-            pass
+            logger.exception("❌ rate/router logging failed")
 
     if user_id and not rate_limiter.is_allowed(user_id):
         await update.message.reply_text(
@@ -288,7 +305,6 @@ async def handle_brief_or_review_input(update: Update, context: ContextTypes.DEF
         )
         return
 
-    # Load saved data if user_data is empty
     if user_id and not context.user_data.get('current_feature'):
         saved = load_user_data(user_id)
         if saved:
@@ -298,34 +314,26 @@ async def handle_brief_or_review_input(update: Update, context: ContextTypes.DEF
 
     current_feature = context.user_data.get('current_feature')
 
-    # Only handle input if we're in brief or review mode
     if current_feature == 'brief':
         await handle_brief_movie_name(update, context)
-        # Save state after handling
         if user_id:
             prefs = context.user_data.get('preferences')
             save_user_data(user_id, prefs.to_dict() if prefs else {}, current_feature)
             add_history(user_id, 'brief', update.message.text, 'brief_generated')
     elif current_feature == 'review':
         await handle_review_movie_name(update, context)
-        # Save state after handling
         if user_id:
             prefs = context.user_data.get('preferences')
             save_user_data(user_id, prefs.to_dict() if prefs else {}, current_feature)
             add_history(user_id, 'review', update.message.text, 'review_generated')
     else:
-        # Ignore text that's not part of a feature flow
         pass
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Handle errors with graceful recovery and user notification
-    """
+    """Handle errors with graceful recovery and user notification"""
     error = context.error
 
-    # If we keep getting Telegram getUpdates Conflict, it means multiple instances are polling.
-    # Trigger a controlled crash so Render restarts the container cleanly.
     if isinstance(error, Conflict):
         logger.error(f"⚠️ Conflict error (multiple instances?): {error}")
         raise error
@@ -334,26 +342,20 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.warning(f"⚠️ Network error (transient): {error}")
         return
 
-    logger.error(f"❌ Error: {type(error).__name__}: {error}")
+    logger.error(f"❌ Error: {type(error).__name__}: {error}", exc_info=True)
 
-    # Notify user if an update object is available
     if update is not None:
         try:
-            if update.message is not None:
-                await update.message.reply_text(
-                    "❌ An unexpected error occurred. Please try again."
-                )
-            elif update.callback_query is not None and update.callback_query.message is not None:
-                await update.callback_query.message.reply_text(
-                    "❌ An unexpected error occurred. Please try again."
-                )
+            if getattr(update, "message", None) is not None:
+                await update.message.reply_text("❌ An unexpected error occurred. Please try again.")
+            elif getattr(update, "callback_query", None) is not None and update.callback_query.message is not None:
+                await update.callback_query.message.reply_text("❌ An unexpected error occurred. Please try again.")
         except Exception:
-            pass
+            logger.exception("❌ error_handler notification failed")
 
 
 def main():
     """Start the bot"""
-    # Start dummy HTTP server if PORT is set (for platforms like Render Web Services)
     port = os.environ.get("PORT")
     if port:
         try:
@@ -363,14 +365,11 @@ def main():
         except ValueError:
             pass
 
-    # Ensure we release lock on exit
     try:
         _acquire_lock()
 
         logger.info("🚀 Starting Telegram Movie Assistant Bot...")
 
-        # Run the bot with retry on transient startup timeouts
-        # NOTE: run_polling() is blocking, so we rebuild the Application per attempt.
         max_retries = 5
         retry_delay_seconds = 3
         max_consecutive_conflicts = 5
@@ -383,57 +382,49 @@ def main():
                 application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
                 application.bot_data["audit_endpoint"] = "bot.polling"
 
-                # Error handler
                 application.add_error_handler(error_handler)
 
-                # Command handlers
                 application.add_handler(CommandHandler("start", start))
                 application.add_handler(CommandHandler("help", handle_help))
                 application.add_handler(CommandHandler("endchat", endchat))
 
-                # Cancel handler
                 application.add_handler(CallbackQueryHandler(handle_cancel, pattern="^cancel$"))
 
-                # Callback query handlers for menu
                 application.add_handler(CallbackQueryHandler(start_recommendation, pattern="^rec_start$"))
                 application.add_handler(CallbackQueryHandler(start_brief, pattern="^brief_start$"))
                 application.add_handler(CallbackQueryHandler(start_review, pattern="^review_start$"))
 
-                # Recommendation flow handlers
                 application.add_handler(CallbackQueryHandler(handle_language_selection, pattern="^rec_lang_"))
                 application.add_handler(CallbackQueryHandler(handle_genre_selection, pattern="^rec_genre_"))
                 application.add_handler(CallbackQueryHandler(handle_duration_selection, pattern="^rec_duration_"))
                 application.add_handler(CallbackQueryHandler(handle_release_preference, pattern="^rec_release_"))
                 application.add_handler(CallbackQueryHandler(handle_mood_preference, pattern="^rec_mood_"))
 
-                # Brief and Review text input handlers
                 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_brief_or_review_input))
 
                 logger.info(f"🤖 Bot started successfully (attempt {attempt}/{max_retries})!")
                 application.run_polling()
                 break
+
             except TimedOut as e:
                 consecutive_conflicts = 0
                 if attempt >= max_retries:
                     raise
                 logger.warning(
-                    f"⚠️ Polling startup timed out (attempt {attempt}/{max_retries}): {e}. "
-                    f"Retrying in {retry_delay_seconds}s..."
+                    f"⚠️ Polling startup timed out (attempt {attempt}/{max_retries}): {e}. Retrying in {retry_delay_seconds}s..."
                 )
-                import time
                 time.sleep(retry_delay_seconds)
 
             except Conflict as e:
                 consecutive_conflicts += 1
-                logger.error(f"⚠️ Conflict (getUpdates): {e} (consecutive={consecutive_conflicts}/{max_consecutive_conflicts})")
-
-                # Exit after several consecutive conflicts so the platform (Render) restarts cleanly.
+                logger.error(
+                    f"⚠️ Conflict (getUpdates): {e} (consecutive={consecutive_conflicts}/{max_consecutive_conflicts})"
+                )
                 if consecutive_conflicts >= max_consecutive_conflicts:
                     logger.error("Too many consecutive Telegram polling conflicts. Exiting to allow clean restart.")
                     sys.exit(1)
 
                 logger.info(f"Backoff before retrying polling: {retry_delay_seconds}s")
-                import time
                 time.sleep(retry_delay_seconds)
 
     except Conflict as e:
@@ -449,3 +440,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
