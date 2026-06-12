@@ -4,6 +4,8 @@ import sys
 import traceback
 
 from dotenv import load_dotenv
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, HTTPException
 
 # Load environment variables FIRST
@@ -85,18 +87,9 @@ try:
         handle_brief_or_review_input = None  # type: ignore
         error_handler = None  # type: ignore
 
-    app = FastAPI(title="Telegram Movie Bot Webhook")
+    app = FastAPI(title="Telegram Movie Bot Webhook", lifespan=lifespan)
 
-    _is_initialized = False
     ptb_app = None
-
-    # ---- Safe startup guards: NEVER crash module import ----
-    if init_db:
-        try:
-            init_db()
-        except Exception:
-            logger.critical("❌ init_db() crashed during import", exc_info=True)
-            traceback.print_exc()
 
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
@@ -148,45 +141,51 @@ try:
             traceback.print_exc()
             ptb_app = None
 
-    # ====== Route Handlers ======
+    # ====== Lifespan: runs AFTER all routes are registered ======
 
-    @app.on_event("startup")
-    async def _startup():
-        """Initialize PTB application once on cold start."""
-        if ptb_app is None:
-            logger.warning("Startup: skipping PTB init (ptb_app is None)")
-            return
-        logger.info("PTB startup: initializing application")
-        await ptb_app.initialize()
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Initialize services after routes are registered (cold start only)."""
+        # init_db() — deferred from module level, never crashes startup
         try:
-            await ptb_app.start()
-            logger.info("PTB startup: started")
-        except Exception as e:
-            logger.warning("PTB startup: start() unsupported/failed (continuing): %s", repr(e))
+            if init_db:
+                await asyncio.to_thread(init_db)
+        except Exception:
+            logger.critical("❌ init_db() failed during lifespan startup", exc_info=True)
+            traceback.print_exc()
 
-    @app.post("/api/webhook")
-    async def telegram_webhook(request: Request):
-        global _is_initialized
-
-        logger.info("WEBHOOK HIT")
-
-        if ptb_app is None:
-            logger.error("❌ Webhook ignored: ptb_app is None (missing TELEGRAM_BOT_TOKEN or build failed)")
-            return Response(status_code=200)
-
-        if not _is_initialized:
-            logger.info("APPLICATION INITIALIZED (starting) -> ptb_app.initialize()")
+        # ptb_app.initialize() — deferred from module level
+        if ptb_app is not None:
             try:
                 await ptb_app.initialize()
                 try:
                     await ptb_app.start()
                 except Exception as e:
-                    logger.warning("⚠️ APPLICATION START FAILED/UNSUPPORTED (continuing): %s", repr(e))
-                _is_initialized = True
-                logger.info("✅ PTB initialize() completed.")
+                    logger.warning("PTB start() unsupported/failed (continuing): %s", repr(e))
+                logger.info("✅ PTB initialized and started in lifespan")
             except Exception:
-                logger.critical("❌ APPLICATION INITIALIZATION FAILED", exc_info=True)
-                raise
+                logger.critical("❌ PTB initialize() failed in lifespan", exc_info=True)
+                traceback.print_exc()
+
+        yield
+
+        # Shutdown
+        if ptb_app is not None:
+            try:
+                await ptb_app.stop()
+                await ptb_app.shutdown()
+            except Exception:
+                pass
+
+    # ====== Route Handlers ======
+
+    @app.post("/api/webhook")
+    async def telegram_webhook(request: Request):
+        logger.info("WEBHOOK HIT")
+
+        if ptb_app is None:
+            logger.error("❌ Webhook ignored: ptb_app is None (missing TELEGRAM_BOT_TOKEN or build failed)")
+            return Response(status_code=200)
 
         try:
             data = await request.json()
