@@ -43,9 +43,6 @@ from utils.memory import (
     end_session,
 )
 
-# Initialize SQLite memory database
-init_db()
-
 # Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -74,13 +71,8 @@ def run_dummy_server(port):
         logger.error(f"Failed to start dummy server: {e}")
 
 
-# Get bot token
+# Get bot token (safe — just reads env var, no side effects)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-if not TELEGRAM_BOT_TOKEN:
-    logger.critical("❌ TELEGRAM_BOT_TOKEN not found in environment variables")
-    sys.exit(1)
-
-logger.info("✅ Bot token loaded successfully")
 
 # Local lock to reduce accidental duplicate polling starts (best-effort on a single host)
 LOCK_FILE = os.path.join(os.path.dirname(__file__), ".bot_lock")
@@ -356,6 +348,16 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 def main():
     """Start the bot"""
+    # Only run this code when executed directly (not when imported)
+    if not TELEGRAM_BOT_TOKEN:
+        logger.critical("❌ TELEGRAM_BOT_TOKEN not found in environment variables")
+        sys.exit(1)
+
+    logger.info("✅ Bot token loaded successfully")
+
+    # Initialize database
+    init_db()
+
     port = os.environ.get("PORT")
     if port:
         try:
@@ -440,4 +442,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

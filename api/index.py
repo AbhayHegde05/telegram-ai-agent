@@ -67,9 +67,9 @@ try:
         log_event = None  # type: ignore
         start_session = None  # type: ignore
 
-    # main imports
+    # Core handlers imports (from handlers/core.py, NOT main.py)
     try:
-        from main import (
+        from handlers.core import (
             start,
             handle_help,
             endchat,
@@ -79,7 +79,7 @@ try:
         )
     except Exception:
         traceback.print_exc()
-        logger.exception("❌ Failed importing main handlers (routes must still register).")
+        logger.exception("❌ Failed importing core handlers (routes must still register).")
         start = None  # type: ignore
         handle_help = None  # type: ignore
         endchat = None  # type: ignore

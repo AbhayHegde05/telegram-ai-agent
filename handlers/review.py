@@ -10,7 +10,10 @@ from telegram.error import TelegramError
 
 from keyboards.menu import get_start_menu_keyboard
 from utils.states import init_user_data, set_current_feature
-from utils.memory import log_event, save_user_data
+from utils.memory import (
+    log_event, save_user_data,
+    async_log_event, async_save_user_data, async_log_interaction,
+)
 from utils.helpers import split_message, sanitize_movie_name, is_valid_movie_name
 from services.groq_service import get_groq_service
 from services.search_service import SearchService
@@ -34,8 +37,12 @@ async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         init_user_data(context)
         set_current_feature(context, 'review')
         user_id = update.effective_user.id if update.effective_user else None
+        username = update.effective_user.username if update.effective_user else None
         if user_id:
-            save_user_data(user_id, {}, 'review')
+            await async_save_user_data(user_id, {}, 'review')
+            await async_log_interaction(user_id, username, "review_start",
+                                         input_text="review_flow",
+                                         metadata={"action": "flow_started"})
 
         await query.edit_message_text(
             text="⭐ Movie Review\n\n"
@@ -58,7 +65,7 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
 
         if user_id:
             try:
-                log_event(
+                await async_log_event(
                     user_id,
                     "review_input",
                     {"movie_name": (movie_name_for_log or "")[:200]},
@@ -107,7 +114,7 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
         try:
             search_results = await search_service.search_movie_reviews(movie_name)
             if search_service.last_error and user_id:
-                log_event(
+                await async_log_event(
                     user_id,
                     "service_error",
                     {
@@ -123,7 +130,7 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
             logger.error(f"Search error: {e}")
             search_results = f"Movie: {movie_name}\nSearch results unavailable. Please try another movie."
             if user_id:
-                log_event(
+                await async_log_event(
                     user_id,
                     "service_error",
                     {"service": "tavily", "error": str(e)[:500], "movie_name": movie_name[:200]},
@@ -139,7 +146,7 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
             if review is None:
                 raise Exception("Groq returned None")
             if groq_service.last_error and user_id:
-                log_event(
+                await async_log_event(
                     user_id,
                     "service_error",
                     {
@@ -155,7 +162,7 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
             logger.error(f"Error generating review: {e}")
             review = "Sorry, I couldn't generate a review right now. Please try again shortly."
             if user_id:
-                log_event(
+                await async_log_event(
                     user_id,
                     "service_error",
                     {"service": "groq", "error": str(e)[:500], "movie_name": movie_name[:200]},
@@ -174,13 +181,21 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
 
         if user_id:
             try:
-                log_event(
+                await async_log_event(
                     user_id,
                     "review_output",
                     {"movie_name": (movie_name_for_log or "")[:200], "review": (review or "")[:1500]},
                     endpoint=context.bot_data.get("audit_endpoint", "bot.polling"),
                     update_kind="message",
                     handler="handle_review_movie_name"
+                )
+                await async_log_interaction(
+                    user_id,
+                    update.effective_user.username if update.effective_user else None,
+                    "review_complete",
+                    input_text=movie_name_for_log or "",
+                    response_text=(review or "")[:500],
+                    metadata={"action": "review_generated", "movie_name": movie_name_for_log or ""},
                 )
             except Exception:
                 pass

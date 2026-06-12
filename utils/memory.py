@@ -4,10 +4,10 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
-from supabase import Client, create_client
+from supabase import Client, ClientOptions, create_client
 
 logger = logging.getLogger(__name__)
 
@@ -29,15 +29,13 @@ def _create_supabase_client() -> Optional[Client]:
         return None
 
     # Vercel serverless + HTTP/2 connections can be reset (StreamReset).
-    # Force HTTP/1.1 for the underlying httpx transport.
+    # Force HTTP/1.1 for the underlying httpx transport via ClientOptions.
     httpx_client = httpx.Client(http2=False)
 
-    # supabase-py v2 uses httpx under the hood via this option.
-    # If the option is not supported, it will raise; we catch at call sites.
     return create_client(
         SUPABASE_URL,
         SUPABASE_KEY,
-        options={"http_client": httpx_client},
+        options=ClientOptions(httpx_client=httpx_client),
     )
 
 
@@ -51,9 +49,6 @@ def _get_supabase() -> Optional[Client]:
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
 
-    # In most serverless environments, module-level objects are reused across warm invocations,
-    # which can make HTTP/2 resets more likely. We still keep a singleton, but recreate it
-    # on-demand if it fails.
     if _supabase_singleton_ready and _supabase_singleton is not None:
         return _supabase_singleton
 
@@ -68,7 +63,13 @@ def _get_supabase() -> Optional[Client]:
         return None
 
 
-async def _to_thread(fn, *args, **kwargs):
+# ---------------------------------------------------------------------------
+# Thread-offloaded helpers — run sync Supabase calls in a thread pool so they
+# never block the FastAPI event loop.
+# ---------------------------------------------------------------------------
+
+async def _run_sync(fn, *args, **kwargs):
+    """Run a synchronous function in a thread pool and await the result."""
     return await asyncio.to_thread(fn, *args, **kwargs)
 
 
@@ -92,6 +93,11 @@ def get_storage_status() -> dict:
         return {"ok": True}
     except Exception as exc:
         return {"ok": False, "error": str(exc)[:500]}
+
+
+async def async_get_storage_status() -> dict:
+    """Thread-offloaded version of get_storage_status."""
+    return await _run_sync(get_storage_status)
 
 
 def _active_session_sync(user_id: int) -> Optional[dict]:
@@ -170,6 +176,27 @@ def start_session(
         return None
 
 
+async def async_start_session(
+    user_id: int,
+    *,
+    chat_id: Optional[int] = None,
+    username: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    force_new: bool = False,
+) -> Optional[str]:
+    """Thread-offloaded version of start_session."""
+    return await _run_sync(
+        start_session,
+        user_id,
+        chat_id=chat_id,
+        username=username,
+        first_name=first_name,
+        last_name=last_name,
+        force_new=force_new,
+    )
+
+
 def end_session(user_id: int) -> None:
     """Close the user's active session."""
     supa = _get_supabase()
@@ -198,6 +225,11 @@ def end_session(user_id: int) -> None:
         logger.error("Error ending session for %s: %s", user_id, exc)
 
 
+async def async_end_session(user_id: int) -> None:
+    """Thread-offloaded version of end_session."""
+    return await _run_sync(end_session, user_id)
+
+
 def load_user_data(user_id: int) -> dict:
     """Load state from the user's active session."""
     supa = _get_supabase()
@@ -216,6 +248,11 @@ def load_user_data(user_id: int) -> dict:
     except Exception as exc:
         logger.error("Error loading session for %s: %s", user_id, exc)
         return {}
+
+
+async def async_load_user_data(user_id: int) -> dict:
+    """Thread-offloaded version of load_user_data."""
+    return await _run_sync(load_user_data, user_id)
 
 
 def save_user_data(
@@ -240,6 +277,15 @@ def save_user_data(
             ).eq("id", session_id).execute()
     except Exception as exc:
         logger.error("Error saving session state for %s: %s", user_id, exc)
+
+
+async def async_save_user_data(
+    user_id: int,
+    preferences: dict,
+    current_feature: Optional[str] = None,
+) -> None:
+    """Thread-offloaded version of save_user_data."""
+    return await _run_sync(save_user_data, user_id, preferences, current_feature=current_feature)
 
 
 def log_event(
@@ -277,6 +323,29 @@ def log_event(
         logger.error("Error logging session event for %s: %s", user_id, exc)
 
 
+async def async_log_event(
+    user_id: int,
+    event_type: str,
+    payload: Optional[dict] = None,
+    *,
+    endpoint: Optional[str] = None,
+    update_kind: Optional[str] = None,
+    handler: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> None:
+    """Thread-offloaded version of log_event."""
+    return await _run_sync(
+        log_event,
+        user_id,
+        event_type,
+        payload,
+        endpoint=endpoint,
+        update_kind=update_kind,
+        handler=handler,
+        session_id=session_id,
+    )
+
+
 def add_history(
     user_id: int,
     feature: str,
@@ -294,6 +363,16 @@ def add_history(
         },
         handler=feature,
     )
+
+
+async def async_add_history(
+    user_id: int,
+    feature: str,
+    input_data: str = "",
+    output_summary: str = "",
+) -> None:
+    """Thread-offloaded version of add_history."""
+    return await _run_sync(add_history, user_id, feature, input_data, output_summary)
 
 
 def get_recent_history(user_id: int, limit: int = 5) -> list:
@@ -331,7 +410,75 @@ def get_recent_history(user_id: int, limit: int = 5) -> list:
         return []
 
 
+async def async_get_recent_history(user_id: int, limit: int = 5) -> list:
+    """Thread-offloaded version of get_recent_history."""
+    return await _run_sync(get_recent_history, user_id, limit)
+
+
 def clear_user_data(user_id: int) -> None:
     """Compatibility alias for closing the active session."""
     end_session(user_id)
 
+
+async def async_clear_user_data(user_id: int) -> None:
+    """Thread-offloaded version of clear_user_data."""
+    return await _run_sync(clear_user_data, user_id)
+
+
+# ---------------------------------------------------------------------------
+# interactions table helper — logs every user action to a flat table for
+# analytics and debugging.
+# ---------------------------------------------------------------------------
+
+def log_interaction(
+    user_id: int,
+    username: Optional[str],
+    action_type: str,
+    input_text: str = "",
+    response_text: str = "",
+    metadata: Optional[dict] = None,
+) -> None:
+    """
+    Log a user interaction to the ``interactions`` table.
+
+    Unlike :func:`log_event` (which is tied to a session), this is a
+    standalone row that is easy to query without session joins.
+    """
+    supa = _get_supabase()
+    if not supa:
+        logger.warning("log_interaction: Supabase not available, skipping")
+        return
+
+    try:
+        supa.table("interactions").insert(
+            {
+                "user_id": user_id,
+                "username": username,
+                "action_type": action_type,
+                "input": input_text[:1000],
+                "response": response_text[:2000],
+                "metadata": metadata or {},
+            }
+        ).execute()
+    except Exception as exc:
+        logger.error("Error logging interaction for user %s: %s", user_id, exc)
+
+
+async def async_log_interaction(
+    user_id: int,
+    username: Optional[str],
+    action_type: str,
+    input_text: str = "",
+    response_text: str = "",
+    metadata: Optional[dict] = None,
+) -> None:
+    """Thread-offloaded version of log_interaction."""
+    return await _run_sync(
+        log_interaction,
+        user_id,
+        username,
+        action_type,
+        input_text,
+        response_text,
+        metadata,
+    )
