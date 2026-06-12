@@ -21,7 +21,7 @@ from utils.helpers import split_message
 from utils.memory import (
     load_user_data, save_user_data, add_history, log_event,
     async_load_user_data, async_save_user_data, async_add_history,
-    async_log_event, async_log_interaction,
+    async_log_event, log_interaction,
 )
 from services.groq_service import get_groq_service
 from services.search_service import SearchService
@@ -58,6 +58,8 @@ async def start_recommendation(update: Update, context: ContextTypes.DEFAULT_TYP
 
         user_id = update.effective_user.id if update.effective_user else None
         username = update.effective_user.username if update.effective_user else None
+        first_name = update.effective_user.first_name if update.effective_user else None
+        print(f"🔥 HANDLER: start_recommendation called for user_id={user_id}")
 
         # Load saved preferences if available
         if user_id:
@@ -72,9 +74,12 @@ async def start_recommendation(update: Update, context: ContextTypes.DEFAULT_TYP
         if user_id:
             preferences = get_preferences(context)
             await async_save_user_data(user_id, preferences.to_dict(), 'recommendation')
-            await async_log_interaction(user_id, username, "recommendation_start",
-                                         input_text="recommendation_flow",
-                                         metadata={"step": 1, "action": "flow_started"})
+            await log_interaction(
+                user_id, username, first_name,
+                action_type="click",
+                input_text="start_recommendation",
+                metadata={"step": 1, "action": "flow_started"},
+            )
 
         # Start with language question (use a new message so steps don't "merge")
         await query.message.reply_text(
@@ -98,6 +103,8 @@ async def handle_language_selection(update: Update, context: ContextTypes.DEFAUL
 
         user_id = update.effective_user.id if update.effective_user else None
         username = update.effective_user.username if update.effective_user else None
+        first_name = update.effective_user.first_name if update.effective_user else None
+        print(f"🔥 HANDLER: handle_language_selection user_id={user_id} data={query.data}")
 
         # Extract language from callback data
         language = query.data.replace("rec_lang_", "").capitalize()
@@ -107,9 +114,13 @@ async def handle_language_selection(update: Update, context: ContextTypes.DEFAUL
         preferences.language = language
         if user_id:
             await async_save_user_data(user_id, preferences.to_dict(), 'recommendation')
-            await async_log_interaction(user_id, username, "recommendation_language",
-                                         input_text=language,
-                                         metadata={"step": 2, "selected": language})
+            await log_interaction(
+                user_id, username, first_name,
+                action_type="click",
+                input_text=query.data,
+                response_text=f"Language selected: {language}",
+                metadata={"step": 2, "selected": language},
+            )
 
         # Move to genre question (new message)
         await query.message.reply_text(
@@ -133,6 +144,8 @@ async def handle_genre_selection(update: Update, context: ContextTypes.DEFAULT_T
 
         user_id = update.effective_user.id if update.effective_user else None
         username = update.effective_user.username if update.effective_user else None
+        first_name = update.effective_user.first_name if update.effective_user else None
+        print(f"🔥 HANDLER: handle_genre_selection user_id={user_id} data={query.data}")
 
         # Extract genre from callback data
         genre = query.data.replace("rec_genre_", "").capitalize()
@@ -142,9 +155,13 @@ async def handle_genre_selection(update: Update, context: ContextTypes.DEFAULT_T
         preferences.genre = genre
         if user_id:
             await async_save_user_data(user_id, preferences.to_dict(), 'recommendation')
-            await async_log_interaction(user_id, username, "recommendation_genre",
-                                         input_text=genre,
-                                         metadata={"step": 3, "selected": genre})
+            await log_interaction(
+                user_id, username, first_name,
+                action_type="click",
+                input_text=query.data,
+                response_text=f"Genre selected: {genre}",
+                metadata={"step": 3, "selected": genre},
+            )
 
         # Move to duration question (new message)
         await query.message.reply_text(
@@ -168,6 +185,8 @@ async def handle_duration_selection(update: Update, context: ContextTypes.DEFAUL
 
         user_id = update.effective_user.id if update.effective_user else None
         username = update.effective_user.username if update.effective_user else None
+        first_name = update.effective_user.first_name if update.effective_user else None
+        print(f"🔥 HANDLER: handle_duration_selection user_id={user_id} data={query.data}")
 
         # Extract duration from callback data
         duration_map = {
@@ -183,9 +202,13 @@ async def handle_duration_selection(update: Update, context: ContextTypes.DEFAUL
         preferences.duration = duration
         if user_id:
             await async_save_user_data(user_id, preferences.to_dict(), 'recommendation')
-            await async_log_interaction(user_id, username, "recommendation_duration",
-                                         input_text=duration,
-                                         metadata={"step": 4, "selected": duration})
+            await log_interaction(
+                user_id, username, first_name,
+                action_type="click",
+                input_text=query.data,
+                response_text=f"Duration selected: {duration}",
+                metadata={"step": 4, "selected": duration},
+            )
 
         # Move to release preference question (new message)
         await query.message.reply_text(
@@ -209,6 +232,8 @@ async def handle_release_preference(update: Update, context: ContextTypes.DEFAUL
 
         user_id = update.effective_user.id if update.effective_user else None
         username = update.effective_user.username if update.effective_user else None
+        first_name = update.effective_user.first_name if update.effective_user else None
+        print(f"🔥 HANDLER: handle_release_preference user_id={user_id} data={query.data}")
 
         # Extract release preference from callback data
         release_map = {
@@ -224,9 +249,13 @@ async def handle_release_preference(update: Update, context: ContextTypes.DEFAUL
         preferences.release = release
         if user_id:
             await async_save_user_data(user_id, preferences.to_dict(), 'recommendation')
-            await async_log_interaction(user_id, username, "recommendation_release",
-                                         input_text=release,
-                                         metadata={"step": 5, "selected": release})
+            await log_interaction(
+                user_id, username, first_name,
+                action_type="click",
+                input_text=query.data,
+                response_text=f"Release selected: {release}",
+                metadata={"step": 5, "selected": release},
+            )
 
         # Move to mood preference question (new message)
         await query.message.reply_text(
@@ -251,6 +280,8 @@ async def handle_mood_preference(update: Update, context: ContextTypes.DEFAULT_T
 
         user_id = update.effective_user.id if update.effective_user else None
         username = update.effective_user.username if update.effective_user else None
+        first_name = update.effective_user.first_name if update.effective_user else None
+        print(f"🔥 HANDLER: handle_mood_preference user_id={user_id} data={query.data}")
 
         # Extract mood from callback data
         mood_map = {
@@ -272,9 +303,13 @@ async def handle_mood_preference(update: Update, context: ContextTypes.DEFAULT_T
         if user_id:
             await async_save_user_data(user_id, preferences.to_dict(), None)
             await async_add_history(user_id, 'recommendation', str(preferences), 'recommendations_generated')
-            await async_log_interaction(user_id, username, "recommendation_mood",
-                                         input_text=mood,
-                                         metadata={"step": 6, "selected": mood, "all_preferences": preferences.to_dict()})
+            await log_interaction(
+                user_id, username, first_name,
+                action_type="click",
+                input_text=query.data,
+                response_text=f"Mood selected: {mood}",
+                metadata={"step": 6, "selected": mood, "all_preferences": preferences.to_dict()},
+            )
 
         # Show processing message (new message)
         await query.message.reply_text(
@@ -299,6 +334,7 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
         preferences = get_preferences(context)
         user_id = query.from_user.id if query.from_user else None
         endpoint = context.bot_data.get("audit_endpoint", "bot.polling")
+        print(f"🔥 HANDLER: generate_recommendations user_id={user_id}")
 
         if user_id:
             await async_log_event(
@@ -308,6 +344,12 @@ async def generate_recommendations(query, context: ContextTypes.DEFAULT_TYPE) ->
                 endpoint=endpoint,
                 update_kind="callback_query",
                 handler="generate_recommendations"
+            )
+            await log_interaction(
+                user_id, None, None,
+                action_type="response",
+                input_text="generating recommendations",
+                metadata={"preferences": preferences.to_dict()},
             )
 
         # Initialize services

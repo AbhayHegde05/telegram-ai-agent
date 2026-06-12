@@ -17,11 +17,7 @@ def _now() -> str:
 
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = (
-    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    or os.getenv("SUPABASE_KEY")
-    or os.getenv("SUPABASE_ANON_KEY")
-)
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 
 def _create_supabase_client() -> Optional[Client]:
@@ -426,59 +422,50 @@ async def async_clear_user_data(user_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# interactions table helper — logs every user action to a flat table for
-# analytics and debugging.
+# interactions table helper — logs every user action to a flat table.
+# Does NOT silently swallow exceptions — prints the result so Vercel logs
+# show exactly what Supabase returned or the error.
 # ---------------------------------------------------------------------------
 
-def log_interaction(
+async def log_interaction(
     user_id: int,
-    username: Optional[str],
-    action_type: str,
-    input_text: str = "",
-    response_text: str = "",
-    metadata: Optional[dict] = None,
-) -> None:
+    username: str | None = None,
+    first_name: str | None = None,
+    action_type: str = "message",
+    input_text: str | None = None,
+    response_text: str | None = None,
+    metadata: dict | None = None,
+) -> dict | None:
     """
-    Log a user interaction to the ``interactions`` table.
+    Insert a row into the ``interactions`` table and print the result.
 
-    Unlike :func:`log_event` (which is tied to a session), this is a
-    standalone row that is easy to query without session joins.
+    Action types: 'start', 'click', 'message', 'response', 'error'
     """
     supa = _get_supabase()
     if not supa:
-        logger.warning("log_interaction: Supabase not available, skipping")
-        return
+        print("❌ log_interaction: Supabase client not available (env vars missing?)")
+        logger.error("log_interaction: Supabase client not available")
+        return None
 
     try:
-        supa.table("interactions").insert(
-            {
-                "user_id": user_id,
-                "username": username,
-                "action_type": action_type,
-                "input": input_text[:1000],
-                "response": response_text[:2000],
-                "metadata": metadata or {},
-            }
-        ).execute()
+        result = await asyncio.to_thread(
+            lambda: supa.table("interactions").insert(
+                {
+                    "user_id": user_id,
+                    "username": username,
+                    "first_name": first_name,
+                    "action_type": action_type,
+                    "input": input_text or "",
+                    "response": response_text or "",
+                    "metadata": metadata or {},
+                }
+            ).execute()
+        )
+        print(f"✅ SUPABASE INSERT RESULT: {result.data}")
+        logger.info("log_interaction OK user=%s type=%s", user_id, action_type)
+        return result
     except Exception as exc:
-        logger.error("Error logging interaction for user %s: %s", user_id, exc)
-
-
-async def async_log_interaction(
-    user_id: int,
-    username: Optional[str],
-    action_type: str,
-    input_text: str = "",
-    response_text: str = "",
-    metadata: Optional[dict] = None,
-) -> None:
-    """Thread-offloaded version of log_interaction."""
-    return await _run_sync(
-        log_interaction,
-        user_id,
-        username,
-        action_type,
-        input_text,
-        response_text,
-        metadata,
-    )
+        error_msg = f"{type(exc).__name__}: {exc}"
+        print(f"❌ SUPABASE INSERT FAILED: {error_msg}")
+        logger.error("log_interaction FAILED for user %s type=%s: %s", user_id, action_type, error_msg)
+        return None

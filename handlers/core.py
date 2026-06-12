@@ -19,6 +19,7 @@ from utils.memory import (
     load_user_data, save_user_data, add_history, log_event, start_session, end_session,
     async_load_user_data, async_save_user_data, async_add_history,
     async_log_event, async_start_session, async_end_session,
+    log_interaction,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start command - Display main menu"""
     user_id = update.effective_user.id if update.effective_user else None
     chat_id = update.effective_chat.id if update.effective_chat else None
+    username = update.effective_user.username if update.effective_user else None
+    first_name = update.effective_user.first_name if update.effective_user else None
+
+    print(f"🔥 HANDLER: /start called for user_id={user_id} username={username}")
 
     logger.info(
         "🚦 START handler entry user_id=%s chat_id=%s has_message=%s",
@@ -56,7 +61,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 update_kind="message",
                 handler="start",
             )
-    except Exception:
+    except Exception as e:
+        print(f"❌ START session/logging error: {e}")
         logger.exception("❌ Error inside START session/logging")
         # do not return; we still try to send the menu
 
@@ -67,8 +73,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 context.user_data.update(saved)
                 if 'preferences' in saved and isinstance(saved['preferences'], dict):
                     context.user_data['preferences'] = RecommendationPreferences.from_dict(saved['preferences'])
-        except Exception:
+        except Exception as e:
+            print(f"❌ START load_user_data error: {e}")
             logger.exception("❌ Error loading user data in START")
+
+    try:
+        await log_interaction(
+            user_id, username, first_name,
+            action_type="start",
+            input_text="/start",
+            metadata={"command": "start"},
+        )
+    except Exception as e:
+        print(f"❌ START log_interaction error: {e}")
 
     # Primary path (old behavior)
     if update.message is not None:
@@ -92,6 +109,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log and display the help guide."""
     user_id = update.effective_user.id if update.effective_user else None
+    username = update.effective_user.username if update.effective_user else None
+    first_name = update.effective_user.first_name if update.effective_user else None
+    print(f"🔥 HANDLER: /help called for user_id={user_id}")
     if user_id:
         await async_log_event(
             user_id,
@@ -101,14 +121,23 @@ async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             update_kind="message",
             handler="help",
         )
+        await log_interaction(
+            user_id, username, first_name,
+            action_type="click",
+            input_text="/help",
+        )
 
     await send_help(update, context)
 
 
 async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Cancel current flow and return to main menu"""
+    user_id = update.effective_user.id if update.effective_user else None
+    username = update.effective_user.username if update.effective_user else None
+    first_name = update.effective_user.first_name if update.effective_user else None
+    print(f"🔥 HANDLER: handle_cancel called for user_id={user_id}")
+
     try:
-        user_id = update.effective_user.id if update.effective_user else None
         if user_id:
             await async_log_event(
                 user_id,
@@ -130,6 +159,15 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if user_id:
         await async_save_user_data(user_id, {}, None)
 
+    try:
+        await log_interaction(
+            user_id, username, first_name,
+            action_type="click",
+            input_text="cancel",
+        )
+    except Exception:
+        pass
+
     await query.edit_message_text(
         text="✅ Cancelled.\n\nChoose what you would like to do:",
         reply_markup=get_start_menu_keyboard(),
@@ -139,6 +177,9 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def endchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """End chat flow and clear user state."""
     user_id = update.effective_user.id if update.effective_user else None
+    username = update.effective_user.username if update.effective_user else None
+    first_name = update.effective_user.first_name if update.effective_user else None
+    print(f"🔥 HANDLER: /endchat called for user_id={user_id}")
     try:
         if user_id:
             await async_log_event(
@@ -156,6 +197,15 @@ async def endchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if user_id:
         await async_end_session(user_id)
 
+    try:
+        await log_interaction(
+            user_id, username, first_name,
+            action_type="click",
+            input_text="/endchat",
+        )
+    except Exception:
+        pass
+
     await update.message.reply_text(
         "👋 Thank you for visiting Movie Assistant! See you again soon—send /start to begin anytime."
     )
@@ -164,6 +214,11 @@ async def endchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_brief_or_review_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Route text input to brief or review handlers based on current state"""
     user_id = update.effective_user.id if update.effective_user else None
+    username = update.effective_user.username if update.effective_user else None
+    first_name = update.effective_user.first_name if update.effective_user else None
+    msg_text = update.message.text if update.message and update.message.text else ""
+
+    print(f"🔥 HANDLER: handle_brief_or_review_input user_id={user_id} text={msg_text[:80]}")
 
     if user_id:
         try:
@@ -194,6 +249,16 @@ async def handle_brief_or_review_input(update: Update, context: ContextTypes.DEF
 
     current_feature = context.user_data.get('current_feature')
 
+    try:
+        await log_interaction(
+            user_id, username, first_name,
+            action_type="message",
+            input_text=msg_text,
+            metadata={"current_feature": current_feature},
+        )
+    except Exception:
+        pass
+
     if current_feature == 'brief':
         await handle_brief_movie_name(update, context)
         if user_id:
@@ -213,6 +278,9 @@ async def handle_brief_or_review_input(update: Update, context: ContextTypes.DEF
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle errors with graceful recovery and user notification"""
     error = context.error
+    error_str = str(error) if error else "unknown"
+
+    print(f"🔥 HANDLER: error_handler called error={error_str[:200]}")
 
     if isinstance(error, Conflict):
         logger.error(f"⚠️ Conflict error (multiple instances?): {error}")
@@ -223,6 +291,22 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     logger.error(f"❌ Error: {type(error).__name__}: {error}", exc_info=True)
+
+    # Log the error to interactions table
+    user_id = None
+    try:
+        if hasattr(update, "effective_user") and update.effective_user:
+            user_id = update.effective_user.id
+            await log_interaction(
+                user_id,
+                update.effective_user.username if update.effective_user else None,
+                update.effective_user.first_name if update.effective_user else None,
+                action_type="error",
+                input_text=str(error)[:500] if error else "unknown",
+                metadata={"error_type": type(error).__name__ if error else "unknown"},
+            )
+    except Exception:
+        pass
 
     if update is not None:
         try:

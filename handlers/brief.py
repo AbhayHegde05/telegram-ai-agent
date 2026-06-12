@@ -12,7 +12,7 @@ from keyboards.menu import get_start_menu_keyboard
 from utils.states import init_user_data, set_current_feature
 from utils.memory import (
     log_event, save_user_data,
-    async_log_event, async_save_user_data, async_log_interaction,
+    async_log_event, async_save_user_data, log_interaction,
 )
 from utils.helpers import split_message, sanitize_movie_name, is_valid_movie_name
 from services.groq_service import get_groq_service
@@ -38,11 +38,16 @@ async def start_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         set_current_feature(context, 'brief')
         user_id = update.effective_user.id if update.effective_user else None
         username = update.effective_user.username if update.effective_user else None
+        first_name = update.effective_user.first_name if update.effective_user else None
+        print(f"🔥 HANDLER: start_brief called for user_id={user_id}")
         if user_id:
             await async_save_user_data(user_id, {}, 'brief')
-            await async_log_interaction(user_id, username, "brief_start",
-                                         input_text="brief_flow",
-                                         metadata={"action": "flow_started"})
+            await log_interaction(
+                user_id, username, first_name,
+                action_type="click",
+                input_text="start_brief",
+                metadata={"action": "flow_started"},
+            )
 
         await query.edit_message_text(
             text="📖 Movie Brief\n\n"
@@ -58,7 +63,10 @@ async def handle_brief_movie_name(update: Update, context: ContextTypes.DEFAULT_
     Handle movie name input and generate brief
     """
     user_id = update.effective_user.id if update.effective_user else None
+    username = update.effective_user.username if update.effective_user else None
+    first_name = update.effective_user.first_name if update.effective_user else None
     movie_name_for_log = None
+    print(f"🔥 HANDLER: handle_brief_movie_name called user_id={user_id}")
     try:
         movie_name = sanitize_movie_name(update.message.text)
         movie_name_for_log = movie_name if movie_name else None
@@ -188,10 +196,11 @@ async def handle_brief_movie_name(update: Update, context: ContextTypes.DEFAULT_
                     update_kind="message",
                     handler="handle_brief_movie_name"
                 )
-                await async_log_interaction(
+                await log_interaction(
                     user_id,
                     update.effective_user.username if update.effective_user else None,
-                    "brief_complete",
+                    update.effective_user.first_name if update.effective_user else None,
+                    action_type="response",
                     input_text=movie_name_for_log or "",
                     response_text=(brief or "")[:500],
                     metadata={"action": "brief_generated", "movie_name": movie_name_for_log or ""},
@@ -231,6 +240,12 @@ async def handle_brief_movie_name(update: Update, context: ContextTypes.DEFAULT_
 
     except Exception as e:
         logger.error(f"Unexpected error in handle_brief_movie_name: {e}")
+        await log_interaction(
+            user_id, username, first_name,
+            action_type="error",
+            input_text=movie_name_for_log or "",
+            metadata={"error": str(e)[:500]},
+        )
         try:
             await update.message.reply_text(
                 text="❌ Sorry, an unexpected error occurred.\n\n"

@@ -12,7 +12,7 @@ from keyboards.menu import get_start_menu_keyboard
 from utils.states import init_user_data, set_current_feature
 from utils.memory import (
     log_event, save_user_data,
-    async_log_event, async_save_user_data, async_log_interaction,
+    async_log_event, async_save_user_data, log_interaction,
 )
 from utils.helpers import split_message, sanitize_movie_name, is_valid_movie_name
 from services.groq_service import get_groq_service
@@ -38,11 +38,16 @@ async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         set_current_feature(context, 'review')
         user_id = update.effective_user.id if update.effective_user else None
         username = update.effective_user.username if update.effective_user else None
+        first_name = update.effective_user.first_name if update.effective_user else None
+        print(f"🔥 HANDLER: start_review called for user_id={user_id}")
         if user_id:
             await async_save_user_data(user_id, {}, 'review')
-            await async_log_interaction(user_id, username, "review_start",
-                                         input_text="review_flow",
-                                         metadata={"action": "flow_started"})
+            await log_interaction(
+                user_id, username, first_name,
+                action_type="click",
+                input_text="start_review",
+                metadata={"action": "flow_started"},
+            )
 
         await query.edit_message_text(
             text="⭐ Movie Review\n\n"
@@ -58,7 +63,10 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
     Handle movie name input and generate comprehensive review
     """
     user_id = update.effective_user.id if update.effective_user else None
+    username = update.effective_user.username if update.effective_user else None
+    first_name = update.effective_user.first_name if update.effective_user else None
     movie_name_for_log = None
+    print(f"🔥 HANDLER: handle_review_movie_name called user_id={user_id}")
     try:
         movie_name = sanitize_movie_name(update.message.text)
         movie_name_for_log = movie_name if movie_name else None
@@ -189,10 +197,11 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
                     update_kind="message",
                     handler="handle_review_movie_name"
                 )
-                await async_log_interaction(
+                await log_interaction(
                     user_id,
                     update.effective_user.username if update.effective_user else None,
-                    "review_complete",
+                    update.effective_user.first_name if update.effective_user else None,
+                    action_type="response",
                     input_text=movie_name_for_log or "",
                     response_text=(review or "")[:500],
                     metadata={"action": "review_generated", "movie_name": movie_name_for_log or ""},
@@ -232,6 +241,12 @@ async def handle_review_movie_name(update: Update, context: ContextTypes.DEFAULT
 
     except Exception as e:
         logger.error(f"Unexpected error in handle_review_movie_name: {e}")
+        await log_interaction(
+            user_id, username, first_name,
+            action_type="error",
+            input_text=movie_name_for_log or "",
+            metadata={"error": str(e)[:500]},
+        )
         try:
             await update.message.reply_text(
                 text="❌ Sorry, an unexpected error occurred.\n\n"
