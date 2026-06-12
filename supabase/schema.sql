@@ -65,14 +65,41 @@ create policy session_events_service_role_access
   using (true)
   with check (true);
 
-revoke all on table public.bot_sessions from anon, authenticated;
-revoke all on table public.session_events from anon, authenticated;
-revoke all on table public.bot_sessions from service_role;
-revoke all on table public.session_events from service_role;
+-- Permission model:
+-- - service_role: full privileges for writes
+-- - anon (fallback): allow inserts so accidental anon-key usage does not fully break writes
 
-grant select, insert, update on table public.bot_sessions to service_role;
-grant select, insert on table public.session_events to service_role;
+-- Clear restrictive defaults for public tables (leave policy logic intact)
+revoke all on table public.bot_sessions from anon, authenticated, service_role;
+revoke all on table public.session_events from anon, authenticated, service_role;
+
+-- service_role grants (expected production key)
+grant all on table public.bot_sessions to service_role;
+grant all on table public.session_events to service_role;
 grant usage, select on sequence public.session_events_id_seq to service_role;
+
+-- anon fallback grants (only used if SUPABASE_SERVICE_ROLE_KEY is missing)
+grant select, insert, update on table public.bot_sessions to anon;
+grant select, insert, update on table public.session_events to anon;
+grant usage, select on sequence public.session_events_id_seq to anon;
+
+-- anon RLS policies (so inserts don't fail if anon key is used)
+drop policy if exists bot_sessions_anon_access on public.bot_sessions;
+create policy bot_sessions_anon_access
+  on public.bot_sessions
+  for all
+  to anon
+  using (true)
+  with check (true);
+
+drop policy if exists session_events_anon_access on public.session_events;
+create policy session_events_anon_access
+  on public.session_events
+  for all
+  to anon
+  using (true)
+  with check (true);
+
 
 -- Remove the previous split storage model after the new tables exist.
 drop table if exists public.user_history cascade;
